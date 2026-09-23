@@ -5,10 +5,13 @@ import pytest
 from pydantic import ValidationError
 
 from github2cv_ml.domain import (
+    CandidateClaim,
     CandidateProfile,
+    EvidenceSource,
     RepoEvidence,
     RepoSnapshot,
     ResumeDocument,
+    ResumeItem,
 )
 
 EXAMPLES = json.loads(
@@ -34,6 +37,55 @@ def test_snapshot_rejects_raw_github_fields() -> None:
 
     with pytest.raises(ValidationError):
         RepoSnapshot.model_validate(payload)
+
+
+def test_evidence_source_requires_locator() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceSource.model_validate({"kind": "file"})
+
+
+def test_evidence_source_lines_require_path() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceSource.model_validate(
+            {
+                "kind": "file",
+                "url": "https://github.com/octocat/hello-world/blob/main/README.md",
+                "line_start": 10,
+            }
+        )
+
+
+def test_candidate_claim_rejects_blank_evidence_id() -> None:
+    with pytest.raises(ValidationError):
+        CandidateClaim.model_validate(
+            {
+                "id": "claim-python-api",
+                "kind": "project",
+                "text": "Built a Python API.",
+                "evidence_ids": ["   "],
+            }
+        )
+
+
+def test_resume_item_rejects_blank_claim_id() -> None:
+    with pytest.raises(ValidationError):
+        ResumeItem.model_validate(
+            {
+                "text": "Built a Python API.",
+                "claim_ids": [""],
+            }
+        )
+
+
+def test_candidate_profile_rejects_duplicate_claim_ids() -> None:
+    claim = EXAMPLES["candidate_profile"]["claims"][0]
+    payload = {
+        **EXAMPLES["candidate_profile"],
+        "claims": [claim, claim],
+    }
+
+    with pytest.raises(ValidationError):
+        CandidateProfile.model_validate(payload)
 
 
 def test_example_provenance_chain_is_connected() -> None:
