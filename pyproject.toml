@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "ML pipeline for turning GitHub repository evidence into CV-ready structured data."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "pydantic>=2.11,<3",
+]
 
 [project.optional-dependencies]
 dev = [
