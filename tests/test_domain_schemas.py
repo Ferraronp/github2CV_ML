@@ -55,6 +55,16 @@ def test_evidence_source_lines_require_path() -> None:
         )
 
 
+def test_evidence_source_rejects_blank_commit_sha_locator() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceSource.model_validate(
+            {
+                "kind": "commit",
+                "commit_sha": "       ",
+            }
+        )
+
+
 def test_candidate_claim_rejects_blank_evidence_id() -> None:
     with pytest.raises(ValidationError):
         CandidateClaim.model_validate(
