@@ -25,8 +25,11 @@ jobs:
       - name: Install project and dev tools
         run: python -m pip install -e ".[dev]"
 
-      - name: Lint
-        run: ruff check .
+      - name: Lint diagnostic
+        run: |
+          ruff check . --fix || true
+          git diff -- tests/test_domain_schemas.py
+          exit 1
 
       - name: Test
         run: python -m pytest
