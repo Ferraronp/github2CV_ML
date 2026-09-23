@@ -4,10 +4,21 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StringConstraints,
+    model_validator,
+)
 
 NonEmptyId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 NonEmptyLocator = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+CommitSha = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=7, pattern=r"^[0-9a-fA-F]+$"),
+]
 
 
 class ContractModel(BaseModel):
@@ -59,7 +70,7 @@ class EvidenceSource(ContractModel):
     kind: EvidenceKind
     url: NonEmptyLocator | None = None
     path: NonEmptyLocator | None = None
-    commit_sha: str | None = Field(default=None, min_length=7)
+    commit_sha: CommitSha | None = None
     line_start: int | None = Field(default=None, ge=1)
     line_end: int | None = Field(default=None, ge=1)
 
