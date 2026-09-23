@@ -2,9 +2,12 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
+
+NonEmptyId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+NonEmptyLocator = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class ContractModel(BaseModel):
@@ -54,14 +57,18 @@ class EvidenceSource(ContractModel):
     """Locator that points back to the source of repository evidence."""
 
     kind: EvidenceKind
-    url: str | None = None
-    path: str | None = None
+    url: NonEmptyLocator | None = None
+    path: NonEmptyLocator | None = None
     commit_sha: str | None = Field(default=None, min_length=7)
     line_start: int | None = Field(default=None, ge=1)
     line_end: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def validate_line_range(self) -> "EvidenceSource":
+    def validate_locator(self) -> "EvidenceSource":
+        if self.url is None and self.path is None and self.commit_sha is None:
+            raise ValueError("at least one source locator is required")
+        if (self.line_start is not None or self.line_end is not None) and self.path is None:
+            raise ValueError("path is required when source lines are provided")
         if self.line_end is not None and self.line_start is None:
             raise ValueError("line_start is required when line_end is provided")
         if (
@@ -77,7 +84,7 @@ class RepoEvidence(ContractModel):
     """One normalized observation backed by a repository source."""
 
     schema_version: Literal["1.0"] = "1.0"
-    id: str = Field(min_length=1)
+    id: NonEmptyId
     repository: RepositoryRef
     category: str = Field(min_length=1)
     observation: str = Field(min_length=1)
@@ -106,10 +113,10 @@ class CandidateIdentity(ContractModel):
 class CandidateClaim(ContractModel):
     """A profile claim that must point to supporting repository evidence."""
 
-    id: str = Field(min_length=1)
+    id: NonEmptyId
     kind: ClaimKind
     text: str = Field(min_length=1)
-    evidence_ids: list[str] = Field(min_length=1)
+    evidence_ids: list[NonEmptyId] = Field(min_length=1)
 
 
 class CandidateProfile(ContractModel):
@@ -120,12 +127,19 @@ class CandidateProfile(ContractModel):
     claims: list[CandidateClaim] = Field(default_factory=list)
     generated_at: datetime
 
+    @model_validator(mode="after")
+    def validate_unique_claim_ids(self) -> "CandidateProfile":
+        claim_ids = [claim.id for claim in self.claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("claim ids must be unique within a candidate profile")
+        return self
+
 
 class ResumeItem(ContractModel):
     """Resume text traced back to one or more profile claims."""
 
     text: str = Field(min_length=1)
-    claim_ids: list[str] = Field(min_length=1)
+    claim_ids: list[NonEmptyId] = Field(min_length=1)
 
 
 class ResumeSection(ContractModel):
