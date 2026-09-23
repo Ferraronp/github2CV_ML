@@ -27,3 +27,5 @@ python -m pytest
 ```
 
 CI runs the same lint and test checks for pull requests and pushes to `main`.
+
+Development work is tracked in GitHub issues and merged through reviewed squash pull requests.
