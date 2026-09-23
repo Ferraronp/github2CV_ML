@@ -11,7 +11,6 @@ from github2cv_ml.domain import (
     ResumeDocument,
 )
 
-
 EXAMPLES = json.loads(
     (Path(__file__).parents[1] / "examples" / "domain_contracts.json").read_text()
 )
