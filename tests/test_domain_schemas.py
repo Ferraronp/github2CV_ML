@@ -2,14 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
 from github2cv_ml.domain import (
     CandidateProfile,
     RepoEvidence,
     RepoSnapshot,
     ResumeDocument,
 )
+from pydantic import ValidationError
 
 
 EXAMPLES = json.loads(
