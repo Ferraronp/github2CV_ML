@@ -31,6 +31,26 @@ GitHub -> RepoSnapshot -> RepoEvidence -> CandidateProfile -> ResumeDocument
 
 Valid JSON examples for the contracts live in `examples/domain_contracts.json`.
 
+## GitHub repository collector
+
+`GitHubRepositoryCollector` accepts either `owner/repo` or a GitHub repository URL and returns a validated `RepoSnapshot` with repository metadata, languages, topics, README contents, and the recursive file tree.
+
+```python
+from github2cv_ml.collectors import GitHubRepositoryCollector
+
+collector = GitHubRepositoryCollector()
+snapshot = collector.collect("octocat/hello-world")
+```
+
+For private repositories, pass a GitHub token that has access to the repository:
+
+```python
+collector = GitHubRepositoryCollector(token="...")
+snapshot = collector.collect("owner/private-repo")
+```
+
+Empty repositories are represented with an empty language map and file tree, and without README contents. Missing or inaccessible repositories raise explicit collector errors instead of leaking raw GitHub API responses downstream.
+
 ## Quality checks
 
 ```bash
