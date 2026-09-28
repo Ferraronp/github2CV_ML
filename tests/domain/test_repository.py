@@ -14,11 +14,12 @@ EXAMPLES = json.loads(
 def test_repo_snapshot_example_validates() -> None:
     snapshot = RepoSnapshot.model_validate(EXAMPLES["repo_snapshot"])
 
-    assert snapshot.schema_version == "2.0"
+    assert snapshot.schema_version == "3.0"
+    assert snapshot.signals.dependencies[0].name == "pydantic"
 
 
 def test_repo_snapshot_rejects_previous_schema_version() -> None:
-    payload = {**EXAMPLES["repo_snapshot"], "schema_version": "1.0"}
+    payload = {**EXAMPLES["repo_snapshot"], "schema_version": "2.0"}
 
     with pytest.raises(ValidationError):
         RepoSnapshot.model_validate(payload)
