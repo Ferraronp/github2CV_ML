@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from github2cv_ml.collectors import (
+    GitHubApiError,
     GitHubRepositoryCollector,
     InvalidRepositoryReferenceError,
     RepositoryNotFoundError,
@@ -56,6 +57,7 @@ def _metadata(**overrides: Any) -> dict[str, Any]:
         "stargazers_count": 12,
         "forks_count": 3,
         "open_issues_count": 7,
+        "size": 42,
         "fork": False,
         "private": False,
         "archived": False,
@@ -92,6 +94,7 @@ def test_collect_returns_normalized_repo_snapshot() -> None:
     snapshot = collector.collect("https://github.com/octocat/hello-world")
 
     assert isinstance(snapshot, RepoSnapshot)
+    assert snapshot.schema_version == "2.0"
     assert snapshot.repository.owner == "octocat"
     assert snapshot.repository.default_branch == "main"
     assert snapshot.languages == {"Python": 1200}
@@ -124,12 +127,16 @@ def test_collect_preserves_repository_tree_path() -> None:
     assert snapshot.file_tree[0].path == path
 
 
-def test_collect_handles_empty_repository() -> None:
+def test_collect_handles_confirmed_empty_repository_without_tree_request() -> None:
+    class EmptyRepositoryClient(FakeGitHubClient):
+        def get_tree(self, owner: str, name: str, ref: str) -> dict[str, Any]:
+            raise AssertionError("tree must not be requested for a confirmed empty repository")
+
     collector = GitHubRepositoryCollector(
-        client=FakeGitHubClient(
+        client=EmptyRepositoryClient(
+            metadata=_metadata(size=0, pushed_at=None),
             languages={},
             readme=None,
-            tree={"tree": [], "truncated": False},
         )
     )
 
@@ -139,6 +146,17 @@ def test_collect_handles_empty_repository() -> None:
     assert snapshot.readme is None
     assert snapshot.file_tree == []
     assert snapshot.file_tree_truncated is False
+
+
+def test_collect_does_not_hide_tree_unavailable_error() -> None:
+    class UnavailableTreeClient(FakeGitHubClient):
+        def get_tree(self, owner: str, name: str, ref: str) -> dict[str, Any]:
+            raise GitHubApiError("GitHub repository data is unavailable (HTTP 409)")
+
+    collector = GitHubRepositoryCollector(client=UnavailableTreeClient())
+
+    with pytest.raises(GitHubApiError, match="HTTP 409"):
+        collector.collect("octocat/hello-world")
 
 
 def test_collect_preserves_private_repository_flag() -> None:
