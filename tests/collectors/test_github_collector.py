@@ -127,16 +127,13 @@ def test_collect_preserves_repository_tree_path() -> None:
     assert snapshot.file_tree[0].path == path
 
 
-def test_collect_handles_confirmed_empty_repository_without_tree_request() -> None:
-    class EmptyRepositoryClient(FakeGitHubClient):
-        def get_tree(self, owner: str, name: str, ref: str) -> dict[str, Any]:
-            raise AssertionError("tree must not be requested for a confirmed empty repository")
-
+def test_collect_handles_empty_repository_with_nonempty_pushed_at() -> None:
     collector = GitHubRepositoryCollector(
-        client=EmptyRepositoryClient(
-            metadata=_metadata(size=0, pushed_at=None),
+        client=FakeGitHubClient(
+            metadata=_metadata(size=0, pushed_at="2013-12-31T23:08:15Z"),
             languages={},
             readme=None,
+            tree={"tree": [], "truncated": False},
         )
     )
 
@@ -146,6 +143,7 @@ def test_collect_handles_confirmed_empty_repository_without_tree_request() -> No
     assert snapshot.readme is None
     assert snapshot.file_tree == []
     assert snapshot.file_tree_truncated is False
+    assert snapshot.pushed_at is not None
 
 
 def test_collect_does_not_hide_tree_unavailable_error() -> None:
