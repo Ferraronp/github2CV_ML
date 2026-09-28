@@ -55,7 +55,7 @@ def _metadata(**overrides: Any) -> dict[str, Any]:
         "topics": ["python", "api"],
         "stargazers_count": 12,
         "forks_count": 3,
-        "open_issues_count": 1,
+        "open_issues_count": 7,
         "fork": False,
         "private": False,
         "archived": False,
@@ -98,6 +98,7 @@ def test_collect_returns_normalized_repo_snapshot() -> None:
     assert snapshot.readme == "# Demo"
     assert snapshot.topics == ["python", "api"]
     assert snapshot.stars == 12
+    assert "open_issues" not in snapshot.model_dump()
     assert snapshot.pushed_at is not None
     assert snapshot.captured_at.tzinfo is not None
     assert [entry.kind for entry in snapshot.file_tree] == [
@@ -105,6 +106,22 @@ def test_collect_returns_normalized_repo_snapshot() -> None:
         RepoTreeEntryKind.FILE,
         RepoTreeEntryKind.SUBMODULE,
     ]
+
+
+def test_collect_preserves_repository_tree_path() -> None:
+    path = " docs/file.txt "
+    collector = GitHubRepositoryCollector(
+        client=FakeGitHubClient(
+            tree={
+                "tree": [{"path": path, "type": "blob", "size": 10}],
+                "truncated": False,
+            }
+        )
+    )
+
+    snapshot = collector.collect("octocat/hello-world")
+
+    assert snapshot.file_tree[0].path == path
 
 
 def test_collect_handles_empty_repository() -> None:
