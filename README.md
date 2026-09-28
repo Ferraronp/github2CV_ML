@@ -33,7 +33,7 @@ Valid JSON examples for the contracts live in `examples/domain_contracts.json`.
 
 ## GitHub repository collector
 
-`GitHubRepositoryCollector` accepts either `owner/repo` or a GitHub repository URL and returns a validated `RepoSnapshot` with repository metadata, languages, topics, README contents, and the recursive file tree.
+`GitHubRepositoryCollector` accepts either `owner/repo` or a GitHub repository URL and returns a validated `RepoSnapshot` with repository metadata, languages, topics, README contents, the recursive file tree, and unambiguous activity signals such as stars, forks, and `pushed_at`.
 
 ```python
 from github2cv_ml.collectors import GitHubRepositoryCollector
