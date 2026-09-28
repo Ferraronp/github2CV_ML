@@ -19,6 +19,18 @@ On Windows PowerShell, activate the environment with:
 .venv\Scripts\Activate.ps1
 ```
 
+## Domain contracts
+
+The pipeline uses explicit Pydantic contracts instead of passing raw GitHub API responses between components:
+
+```text
+GitHub -> RepoSnapshot -> RepoEvidence -> CandidateProfile -> ResumeDocument
+```
+
+`RepoEvidence` keeps the repository source locator for an observation. `CandidateProfile` claims reference evidence IDs, and `ResumeDocument` items reference claim IDs so generated CV text remains traceable to repository evidence.
+
+Valid JSON examples for the contracts live in `examples/domain_contracts.json`.
+
 ## Quality checks
 
 ```bash

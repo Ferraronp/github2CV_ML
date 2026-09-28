@@ -1,0 +1,85 @@
+{
+  "repo_snapshot": {
+    "schema_version": "1.0",
+    "repository": {
+      "owner": "octocat",
+      "name": "hello-world",
+      "url": "https://github.com/octocat/hello-world",
+      "default_branch": "main"
+    },
+    "description": "Example Python API project",
+    "topics": ["python", "api"],
+    "languages": {
+      "Python": 1200,
+      "Dockerfile": 200
+    },
+    "stars": 12,
+    "forks": 3,
+    "open_issues": 1,
+    "is_fork": false,
+    "archived": false,
+    "captured_at": "2026-09-23T15:00:00Z"
+  },
+  "repo_evidence": {
+    "schema_version": "1.0",
+    "id": "ev-readme-rest-api",
+    "repository": {
+      "owner": "octocat",
+      "name": "hello-world",
+      "url": "https://github.com/octocat/hello-world",
+      "default_branch": "main"
+    },
+    "category": "project_signal",
+    "observation": "The README documents a Python REST API service.",
+    "value": "Python REST API",
+    "source": {
+      "kind": "file",
+      "url": "https://github.com/octocat/hello-world/blob/main/README.md",
+      "path": "README.md",
+      "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+      "line_start": 10,
+      "line_end": 16
+    },
+    "captured_at": "2026-09-23T15:00:00Z"
+  },
+  "candidate_profile": {
+    "schema_version": "1.0",
+    "candidate": {
+      "github_login": "octocat",
+      "display_name": "Octo Cat"
+    },
+    "claims": [
+      {
+        "id": "claim-python-api",
+        "kind": "project",
+        "text": "Built and documented a Python REST API.",
+        "evidence_ids": ["ev-readme-rest-api"]
+      }
+    ],
+    "generated_at": "2026-09-23T15:05:00Z"
+  },
+  "resume_document": {
+    "schema_version": "1.0",
+    "candidate_name": "Octo Cat",
+    "headline": {
+      "text": "Python REST API development",
+      "claim_ids": ["claim-python-api"]
+    },
+    "summary": {
+      "text": "Built and documented a Python REST API.",
+      "claim_ids": ["claim-python-api"]
+    },
+    "sections": [
+      {
+        "title": "Selected projects",
+        "items": [
+          {
+            "text": "Built and documented a Python REST API.",
+            "claim_ids": ["claim-python-api"]
+          }
+        ]
+      }
+    ],
+    "generated_at": "2026-09-23T15:10:00Z"
+  }
+}
