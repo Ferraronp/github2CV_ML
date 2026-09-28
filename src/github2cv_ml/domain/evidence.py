@@ -6,7 +6,13 @@ from typing import Literal
 
 from pydantic import Field, JsonValue, model_validator
 
-from github2cv_ml.domain.base import CommitSha, ContractModel, NonEmptyId, NonEmptyLocator
+from github2cv_ml.domain.base import (
+    CommitSha,
+    ContractModel,
+    NonEmptyId,
+    NonEmptyLocator,
+    RepositoryPath,
+)
 from github2cv_ml.domain.repository import RepositoryRef
 
 
@@ -27,7 +33,7 @@ class EvidenceSource(ContractModel):
 
     kind: EvidenceKind
     url: NonEmptyLocator | None = None
-    path: NonEmptyLocator | None = None
+    path: RepositoryPath | None = None
     commit_sha: CommitSha | None = None
     line_start: int | None = Field(default=None, ge=1)
     line_end: int | None = Field(default=None, ge=1)
