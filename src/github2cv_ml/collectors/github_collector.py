@@ -7,10 +7,10 @@ from urllib.parse import urlparse
 from github2cv_ml.collectors.errors import GitHubApiError, InvalidRepositoryReferenceError
 from github2cv_ml.collectors.github_client import GitHubApiClient
 from github2cv_ml.domain import (
+    RepositoryRef,
     RepoSnapshot,
     RepoTreeEntry,
     RepoTreeEntryKind,
-    RepositoryRef,
 )
 
 
