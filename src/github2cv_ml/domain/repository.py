@@ -4,9 +4,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field
 
-from github2cv_ml.domain.base import ContractModel
+from github2cv_ml.domain.base import ContractModel, RepositoryPath
 
 
 class RepositoryRef(ContractModel):
@@ -29,22 +29,15 @@ class RepoTreeEntryKind(StrEnum):
 class RepoTreeEntry(ContractModel):
     """One normalized entry from a repository file tree."""
 
-    path: str = Field(min_length=1)
+    path: RepositoryPath
     kind: RepoTreeEntryKind
     size: int | None = Field(default=None, ge=0)
-
-    @field_validator("path")
-    @classmethod
-    def validate_path(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("repository path cannot be whitespace-only")
-        return value
 
 
 class RepoSnapshot(ContractModel):
     """Normalized repository metadata collected from GitHub."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     repository: RepositoryRef
     description: str | None = None
     topics: list[str] = Field(default_factory=list)
