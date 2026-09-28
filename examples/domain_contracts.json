@@ -1,6 +1,6 @@
 {
   "repo_snapshot": {
-    "schema_version": "1.0",
+    "schema_version": "2.0",
     "repository": {
       "owner": "octocat",
       "name": "hello-world",
@@ -13,11 +13,26 @@
       "Python": 1200,
       "Dockerfile": 200
     },
+    "readme": "# Hello World\n\nExample Python API project.",
+    "file_tree": [
+      {
+        "path": "README.md",
+        "kind": "file",
+        "size": 512
+      },
+      {
+        "path": "src",
+        "kind": "directory",
+        "size": null
+      }
+    ],
+    "file_tree_truncated": false,
     "stars": 12,
     "forks": 3,
-    "open_issues": 1,
     "is_fork": false,
+    "is_private": false,
     "archived": false,
+    "pushed_at": "2026-09-23T14:30:00Z",
     "captured_at": "2026-09-23T15:00:00Z"
   },
   "repo_evidence": {
