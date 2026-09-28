@@ -40,8 +40,7 @@ class GitHubApiClient:
     def get_tree(self, owner: str, name: str, ref: str) -> dict[str, Any]:
         encoded_ref = quote(ref, safe="")
         return self._request_json(
-            f"{self._repo_path(owner, name)}/git/trees/{encoded_ref}?recursive=1",
-            empty_on_conflict=True,
+            f"{self._repo_path(owner, name)}/git/trees/{encoded_ref}?recursive=1"
         )
 
     @staticmethod
@@ -50,13 +49,8 @@ class GitHubApiClient:
         encoded_name = quote(name, safe="")
         return f"/repos/{encoded_owner}/{encoded_name}"
 
-    def _request_json(
-        self,
-        path: str,
-        *,
-        empty_on_conflict: bool = False,
-    ) -> dict[str, Any]:
-        payload = self._request_bytes(path, empty_on_conflict=empty_on_conflict)
+    def _request_json(self, path: str) -> dict[str, Any]:
+        payload = self._request_bytes(path)
         if payload is None:
             return {}
         try:
@@ -73,7 +67,6 @@ class GitHubApiClient:
         *,
         accept: str = "application/vnd.github+json",
         allow_not_found: bool = False,
-        empty_on_conflict: bool = False,
     ) -> bytes | None:
         request = Request(
             f"https://api.github.com{path}",
@@ -91,8 +84,8 @@ class GitHubApiClient:
                 ) from exc
             if exc.code in {401, 403}:
                 raise RepositoryAccessError("GitHub rejected repository access") from exc
-            if exc.code == 409 and empty_on_conflict:
-                return b'{"tree": [], "truncated": false}'
+            if exc.code == 409:
+                raise GitHubApiError("GitHub repository data is unavailable (HTTP 409)") from exc
             raise GitHubApiError(f"GitHub API request failed with HTTP {exc.code}") from exc
         except URLError as exc:
             raise GitHubApiError("GitHub API request failed") from exc
