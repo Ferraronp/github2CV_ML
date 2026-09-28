@@ -40,7 +40,8 @@ class GitHubApiClient:
     def get_tree(self, owner: str, name: str, ref: str) -> dict[str, Any]:
         encoded_ref = quote(ref, safe="")
         return self._request_json(
-            f"{self._repo_path(owner, name)}/git/trees/{encoded_ref}?recursive=1"
+            f"{self._repo_path(owner, name)}/git/trees/{encoded_ref}?recursive=1",
+            allow_empty_repository_conflict=True,
         )
 
     @staticmethod
@@ -49,8 +50,16 @@ class GitHubApiClient:
         encoded_name = quote(name, safe="")
         return f"/repos/{encoded_owner}/{encoded_name}"
 
-    def _request_json(self, path: str) -> dict[str, Any]:
-        payload = self._request_bytes(path)
+    def _request_json(
+        self,
+        path: str,
+        *,
+        allow_empty_repository_conflict: bool = False,
+    ) -> dict[str, Any]:
+        payload = self._request_bytes(
+            path,
+            allow_empty_repository_conflict=allow_empty_repository_conflict,
+        )
         if payload is None:
             return {}
         try:
@@ -67,6 +76,7 @@ class GitHubApiClient:
         *,
         accept: str = "application/vnd.github+json",
         allow_not_found: bool = False,
+        allow_empty_repository_conflict: bool = False,
     ) -> bytes | None:
         request = Request(
             f"https://api.github.com{path}",
@@ -85,6 +95,8 @@ class GitHubApiClient:
             if exc.code in {401, 403}:
                 raise RepositoryAccessError("GitHub rejected repository access") from exc
             if exc.code == 409:
+                if allow_empty_repository_conflict and _is_empty_repository_conflict(exc):
+                    return b'{"tree": [], "truncated": false}'
                 raise GitHubApiError("GitHub repository data is unavailable (HTTP 409)") from exc
             raise GitHubApiError(f"GitHub API request failed with HTTP {exc.code}") from exc
         except URLError as exc:
@@ -99,3 +111,13 @@ class GitHubApiClient:
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
+
+
+def _is_empty_repository_conflict(error: HTTPError) -> bool:
+    """Return True only for GitHub's explicit empty Git repository conflict."""
+
+    try:
+        payload = json.loads(error.read())
+    except (json.JSONDecodeError, OSError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("message") == "Git Repository is empty."
