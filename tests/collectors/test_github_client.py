@@ -1,3 +1,4 @@
+from io import BytesIO
 from urllib.error import HTTPError
 
 import pytest
@@ -50,9 +51,39 @@ def test_client_treats_missing_readme_as_none(monkeypatch: pytest.MonkeyPatch) -
     assert client.get_readme("owner", "repo") is None
 
 
-def test_client_does_not_treat_tree_conflict_as_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_client_treats_explicit_empty_tree_conflict_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fake_urlopen(request: object, timeout: float) -> FakeResponse:
-        raise HTTPError("https://api.github.com/tree", 409, "Conflict", None, None)
+        raise HTTPError(
+            "https://api.github.com/tree",
+            409,
+            "Conflict",
+            None,
+            BytesIO(b'{"message": "Git Repository is empty."}'),
+        )
+
+    monkeypatch.setattr(github_client, "urlopen", fake_urlopen)
+
+    client = github_client.GitHubApiClient()
+
+    assert client.get_tree("owner", "repo", "main") == {
+        "tree": [],
+        "truncated": False,
+    }
+
+
+def test_client_does_not_treat_other_tree_conflict_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: object, timeout: float) -> FakeResponse:
+        raise HTTPError(
+            "https://api.github.com/tree",
+            409,
+            "Conflict",
+            None,
+            BytesIO(b'{"message": "Git repository is temporarily unavailable."}'),
+        )
 
     monkeypatch.setattr(github_client, "urlopen", fake_urlopen)
 
