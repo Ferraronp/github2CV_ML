@@ -39,3 +39,16 @@ def test_evidence_source_rejects_blank_commit_sha_locator() -> None:
                 "commit_sha": "       ",
             }
         )
+
+
+def test_evidence_source_preserves_repository_path_whitespace() -> None:
+    path = " docs/file.txt "
+
+    source = EvidenceSource(kind="file", path=path)
+
+    assert source.path == path
+
+
+def test_evidence_source_rejects_whitespace_only_path() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceSource(kind="file", path="   ")
