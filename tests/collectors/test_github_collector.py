@@ -9,7 +9,7 @@ from github2cv_ml.collectors import (
     RepositoryNotFoundError,
     parse_repository_reference,
 )
-from github2cv_ml.domain import RepoSnapshot, RepoTreeEntryKind
+from github2cv_ml.domain import DependencyEcosystem, RepoSnapshot, RepoTreeEntryKind, ToolingKind
 
 
 class FakeGitHubClient:
@@ -20,6 +20,7 @@ class FakeGitHubClient:
         languages: dict[str, int] | None = None,
         readme: str | None = "# Demo",
         tree: dict[str, Any] | None = None,
+        files: dict[str, str] | None = None,
     ) -> None:
         self.metadata = metadata or _metadata()
         self.languages = languages if languages is not None else {"Python": 1200}
@@ -32,6 +33,7 @@ class FakeGitHubClient:
             ],
             "truncated": False,
         }
+        self.files = files or {}
 
     def get_repository(self, owner: str, name: str) -> dict[str, Any]:
         return self.metadata
@@ -44,6 +46,9 @@ class FakeGitHubClient:
 
     def get_tree(self, owner: str, name: str, ref: str) -> dict[str, Any]:
         return self.tree
+
+    def get_file(self, owner: str, name: str, path: str, ref: str) -> str | None:
+        return self.files.get(path)
 
 
 def _metadata(**overrides: Any) -> dict[str, Any]:
@@ -94,13 +99,14 @@ def test_collect_returns_normalized_repo_snapshot() -> None:
     snapshot = collector.collect("https://github.com/octocat/hello-world")
 
     assert isinstance(snapshot, RepoSnapshot)
-    assert snapshot.schema_version == "2.0"
+    assert snapshot.schema_version == "3.0"
     assert snapshot.repository.owner == "octocat"
     assert snapshot.repository.default_branch == "main"
     assert snapshot.languages == {"Python": 1200}
     assert snapshot.readme == "# Demo"
     assert snapshot.topics == ["python", "api"]
     assert snapshot.stars == 12
+    assert snapshot.signals.dependencies == []
     assert "open_issues" not in snapshot.model_dump()
     assert snapshot.pushed_at is not None
     assert snapshot.captured_at.tzinfo is not None
@@ -109,6 +115,35 @@ def test_collect_returns_normalized_repo_snapshot() -> None:
         RepoTreeEntryKind.FILE,
         RepoTreeEntryKind.SUBMODULE,
     ]
+
+
+def test_collect_adds_deterministic_project_signals() -> None:
+    collector = GitHubRepositoryCollector(
+        client=FakeGitHubClient(
+            tree={
+                "tree": [
+                    {"path": "pyproject.toml", "type": "blob", "size": 100},
+                    {"path": "Dockerfile", "type": "blob", "size": 80},
+                    {"path": ".github/workflows/ci.yml", "type": "blob", "size": 60},
+                    {"path": "tests", "type": "tree"},
+                ],
+                "truncated": False,
+            },
+            files={
+                "pyproject.toml": '[project]\ndependencies = ["fastapi>=0.115"]\n'
+            },
+        )
+    )
+
+    snapshot = collector.collect("octocat/hello-world")
+
+    assert [(item.name, item.ecosystem) for item in snapshot.signals.dependencies] == [
+        ("fastapi", DependencyEcosystem.PYTHON)
+    ]
+    assert {item.kind for item in snapshot.signals.tooling} == {
+        ToolingKind.DOCKERFILE,
+        ToolingKind.GITHUB_ACTIONS,
+    }
 
 
 def test_collect_preserves_repository_tree_path() -> None:
@@ -142,6 +177,7 @@ def test_collect_handles_empty_repository_with_nonempty_pushed_at() -> None:
     assert snapshot.languages == {}
     assert snapshot.readme is None
     assert snapshot.file_tree == []
+    assert snapshot.signals.dependencies == []
     assert snapshot.file_tree_truncated is False
     assert snapshot.pushed_at is not None
 

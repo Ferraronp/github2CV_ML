@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field
 
 from github2cv_ml.domain.base import ContractModel, RepositoryPath
+from github2cv_ml.domain.signals import RepositorySignals
 
 
 class RepositoryRef(ContractModel):
@@ -37,7 +38,7 @@ class RepoTreeEntry(ContractModel):
 class RepoSnapshot(ContractModel):
     """Normalized repository metadata collected from GitHub."""
 
-    schema_version: Literal["2.0"] = "2.0"
+    schema_version: Literal["3.0"] = "3.0"
     repository: RepositoryRef
     description: str | None = None
     topics: list[str] = Field(default_factory=list)
@@ -45,6 +46,7 @@ class RepoSnapshot(ContractModel):
     readme: str | None = None
     file_tree: list[RepoTreeEntry] = Field(default_factory=list)
     file_tree_truncated: bool = False
+    signals: RepositorySignals = Field(default_factory=RepositorySignals)
     stars: int = Field(default=0, ge=0)
     forks: int = Field(default=0, ge=0)
     is_fork: bool = False
