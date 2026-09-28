@@ -12,7 +12,16 @@ EXAMPLES = json.loads(
 
 
 def test_repo_snapshot_example_validates() -> None:
-    RepoSnapshot.model_validate(EXAMPLES["repo_snapshot"])
+    snapshot = RepoSnapshot.model_validate(EXAMPLES["repo_snapshot"])
+
+    assert snapshot.schema_version == "2.0"
+
+
+def test_repo_snapshot_rejects_previous_schema_version() -> None:
+    payload = {**EXAMPLES["repo_snapshot"], "schema_version": "1.0"}
+
+    with pytest.raises(ValidationError):
+        RepoSnapshot.model_validate(payload)
 
 
 def test_snapshot_rejects_raw_github_fields() -> None:
