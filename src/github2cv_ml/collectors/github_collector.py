@@ -47,7 +47,11 @@ class GitHubRepositoryCollector:
 
         languages = self.client.get_languages(owner, name)
         readme = self.client.get_readme(owner, name)
-        tree_payload = self.client.get_tree(owner, name, default_branch)
+
+        if _is_confirmed_empty_repository(metadata, languages, readme):
+            tree_payload: dict[str, Any] = {"tree": [], "truncated": False}
+        else:
+            tree_payload = self.client.get_tree(owner, name, default_branch)
 
         canonical_owner = _nested_string(metadata, "owner", "login") or owner
         canonical_name = _string(metadata, "name") or name
@@ -106,6 +110,19 @@ def parse_repository_reference(reference: str) -> tuple[str, str]:
     if not owner or not name:
         raise InvalidRepositoryReferenceError("Repository owner and name cannot be empty")
     return owner, name
+
+
+def _is_confirmed_empty_repository(
+    metadata: dict[str, Any],
+    languages: dict[str, int],
+    readme: str | None,
+) -> bool:
+    return (
+        metadata.get("size") == 0
+        and metadata.get("pushed_at") is None
+        and not languages
+        and readme is None
+    )
 
 
 def _normalize_tree(payload: dict[str, Any]) -> list[RepoTreeEntry]:
