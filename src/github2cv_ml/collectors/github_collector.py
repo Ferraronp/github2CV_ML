@@ -70,7 +70,6 @@ class GitHubRepositoryCollector:
             file_tree_truncated=bool(tree_payload.get("truncated", False)),
             stars=int(metadata.get("stargazers_count", 0)),
             forks=int(metadata.get("forks_count", 0)),
-            open_issues=int(metadata.get("open_issues_count", 0)),
             is_fork=bool(metadata.get("fork", False)),
             is_private=bool(metadata.get("private", False)),
             archived=bool(metadata.get("archived", False)),
