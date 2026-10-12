@@ -212,3 +212,28 @@ def test_collect_propagates_missing_repository_error() -> None:
 
     with pytest.raises(RepositoryNotFoundError):
         collector.collect("octocat/missing")
+
+
+def test_collect_skips_bare_vcs_urls_and_keeps_requirements_duplicates_safe() -> None:
+    collector = GitHubRepositoryCollector(
+        client=FakeGitHubClient(
+            tree={
+                "tree": [{"path": "requirements.txt", "type": "blob", "size": 120}],
+                "truncated": False,
+            },
+            files={
+                "requirements.txt": (
+                    "requests\nrequests>=2\n"
+                    "https://example.com/pkg.whl\n"
+                    "git+https://github.com/org/repo.git\n"
+                ),
+            },
+        )
+    )
+
+    snapshot = collector.collect("octocat/hello-world")
+
+    assert [(dep.name, dep.requirement) for dep in snapshot.signals.dependencies] == [
+        ("requests", None),
+        ("requests", ">=2"),
+    ]

@@ -11,6 +11,7 @@ from github2cv_ml.signals.dependencies.common import deduplicate_dependencies
 _PYTHON_REQUIREMENT_RE = re.compile(
     r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]+\])?\s*(.*)$"
 )
+_BARE_SOURCE_RE = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*://|(?:git|hg|svn|bzr)@)", re.I)
 
 
 def parse_pyproject(path: str, content: str) -> list[DependencySignal]:
@@ -144,6 +145,9 @@ def _requirements_group(path: str) -> str:
 
 
 def _parse_python_requirement(requirement: str) -> tuple[str, str | None] | None:
+    # A bare URL/VCS locator has no reliable package name; do not treat its scheme as one.
+    if _BARE_SOURCE_RE.match(requirement.strip()):
+        return None
     match = _PYTHON_REQUIREMENT_RE.match(requirement)
     if match is None:
         return None

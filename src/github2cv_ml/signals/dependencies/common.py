@@ -16,4 +16,7 @@ def deduplicate_dependencies(dependencies: list[DependencySignal]) -> list[Depen
             dependency.requirement,
         )
         unique[key] = dependency
-    return [unique[key] for key in sorted(unique)]
+    return [
+        unique[key]
+        for key in sorted(unique, key=lambda key: (key[:4], key[4] is not None, key[4] or ""))
+    ]
