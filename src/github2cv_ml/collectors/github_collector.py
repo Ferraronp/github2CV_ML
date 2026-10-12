@@ -12,6 +12,7 @@ from github2cv_ml.domain import (
     RepoTreeEntry,
     RepoTreeEntryKind,
 )
+from github2cv_ml.signals import dependency_manifest_paths, extract_repository_signals
 
 
 class GitHubRepositoryClient(Protocol):
@@ -24,6 +25,8 @@ class GitHubRepositoryClient(Protocol):
     def get_readme(self, owner: str, name: str) -> str | None: ...
 
     def get_tree(self, owner: str, name: str, ref: str) -> dict[str, Any]: ...
+
+    def get_file(self, owner: str, name: str, path: str, ref: str) -> str | None: ...
 
 
 class GitHubRepositoryCollector:
@@ -48,6 +51,15 @@ class GitHubRepositoryCollector:
         languages = self.client.get_languages(owner, name)
         readme = self.client.get_readme(owner, name)
         tree_payload = self.client.get_tree(owner, name, default_branch)
+        file_tree = _normalize_tree(tree_payload)
+        file_contents = _collect_signal_file_contents(
+            self.client,
+            owner,
+            name,
+            default_branch,
+            file_tree,
+        )
+        signals = extract_repository_signals(file_tree, file_contents)
 
         canonical_owner = _nested_string(metadata, "owner", "login") or owner
         canonical_name = _string(metadata, "name") or name
@@ -66,8 +78,9 @@ class GitHubRepositoryCollector:
             topics=[str(topic) for topic in metadata.get("topics") or []],
             languages=languages,
             readme=readme,
-            file_tree=_normalize_tree(tree_payload),
+            file_tree=file_tree,
             file_tree_truncated=bool(tree_payload.get("truncated", False)),
+            signals=signals,
             stars=int(metadata.get("stargazers_count", 0)),
             forks=int(metadata.get("forks_count", 0)),
             is_fork=bool(metadata.get("fork", False)),
@@ -106,6 +119,21 @@ def parse_repository_reference(reference: str) -> tuple[str, str]:
     if not owner or not name:
         raise InvalidRepositoryReferenceError("Repository owner and name cannot be empty")
     return owner, name
+
+
+def _collect_signal_file_contents(
+    client: GitHubRepositoryClient,
+    owner: str,
+    name: str,
+    ref: str,
+    file_tree: list[RepoTreeEntry],
+) -> dict[str, str]:
+    contents: dict[str, str] = {}
+    for path in dependency_manifest_paths(file_tree):
+        content = client.get_file(owner, name, path, ref)
+        if content is not None:
+            contents[path] = content
+    return contents
 
 
 def _normalize_tree(payload: dict[str, Any]) -> list[RepoTreeEntry]:

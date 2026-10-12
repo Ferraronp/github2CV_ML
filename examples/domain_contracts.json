@@ -1,6 +1,6 @@
 {
   "repo_snapshot": {
-    "schema_version": "2.0",
+    "schema_version": "3.0",
     "repository": {
       "owner": "octocat",
       "name": "hello-world",
@@ -15,18 +15,34 @@
     },
     "readme": "# Hello World\n\nExample Python API project.",
     "file_tree": [
-      {
-        "path": "README.md",
-        "kind": "file",
-        "size": 512
-      },
-      {
-        "path": "src",
-        "kind": "directory",
-        "size": null
-      }
+      {"path": "README.md", "kind": "file", "size": 512},
+      {"path": "pyproject.toml", "kind": "file", "size": 320},
+      {"path": "Dockerfile", "kind": "file", "size": 128},
+      {"path": ".github/workflows/ci.yml", "kind": "file", "size": 256},
+      {"path": "src", "kind": "directory", "size": null},
+      {"path": "tests", "kind": "directory", "size": null}
     ],
     "file_tree_truncated": false,
+    "signals": {
+      "dependencies": [
+        {
+          "name": "pydantic",
+          "ecosystem": "python",
+          "requirement": ">=2.11,<3",
+          "group": "runtime",
+          "source_path": "pyproject.toml"
+        }
+      ],
+      "manifests": [{"kind": "pyproject", "path": "pyproject.toml"}],
+      "tooling": [
+        {"kind": "github_actions", "path": ".github/workflows/ci.yml"},
+        {"kind": "dockerfile", "path": "Dockerfile"}
+      ],
+      "structures": [
+        {"kind": "source", "path": "src"},
+        {"kind": "tests", "path": "tests"}
+      ]
+    },
     "stars": 12,
     "forks": 3,
     "is_fork": false,
@@ -59,10 +75,7 @@
   },
   "candidate_profile": {
     "schema_version": "1.0",
-    "candidate": {
-      "github_login": "octocat",
-      "display_name": "Octo Cat"
-    },
+    "candidate": {"github_login": "octocat", "display_name": "Octo Cat"},
     "claims": [
       {
         "id": "claim-python-api",
@@ -76,10 +89,7 @@
   "resume_document": {
     "schema_version": "1.0",
     "candidate_name": "Octo Cat",
-    "headline": {
-      "text": "Python REST API development",
-      "claim_ids": ["claim-python-api"]
-    },
+    "headline": {"text": "Python REST API development", "claim_ids": ["claim-python-api"]},
     "summary": {
       "text": "Built and documented a Python REST API.",
       "claim_ids": ["claim-python-api"]

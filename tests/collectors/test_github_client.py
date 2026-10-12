@@ -51,6 +51,34 @@ def test_client_treats_missing_readme_as_none(monkeypatch: pytest.MonkeyPatch) -
     assert client.get_readme("owner", "repo") is None
 
 
+def test_client_fetches_repository_file_at_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_url: list[str] = []
+
+    def fake_urlopen(request: object, timeout: float) -> FakeResponse:
+        captured_url.append(request.full_url)  # type: ignore[attr-defined]
+        return FakeResponse(b'{"dependencies": {"react": "^19"}}')
+
+    monkeypatch.setattr(github_client, "urlopen", fake_urlopen)
+
+    client = github_client.GitHubApiClient()
+
+    assert client.get_file("owner", "repo", "web/package.json", "feature/signals") is not None
+    assert captured_url == [
+        "https://api.github.com/repos/owner/repo/contents/web/package.json?ref=feature%2Fsignals"
+    ]
+
+
+def test_client_treats_missing_repository_file_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: object, timeout: float) -> FakeResponse:
+        raise HTTPError("https://api.github.com/file", 404, "Not Found", None, None)
+
+    monkeypatch.setattr(github_client, "urlopen", fake_urlopen)
+
+    assert github_client.GitHubApiClient().get_file("owner", "repo", "package.json", "main") is None
+
+
 def test_client_treats_explicit_empty_tree_conflict_as_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

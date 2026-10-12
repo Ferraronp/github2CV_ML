@@ -44,6 +44,20 @@ class GitHubApiClient:
             allow_empty_repository_conflict=True,
         )
 
+    def get_file(self, owner: str, name: str, path: str, ref: str) -> str | None:
+        """Fetch one repository text file, returning None if it disappeared or is absent."""
+
+        encoded_path = quote(path, safe="/")
+        encoded_ref = quote(ref, safe="")
+        payload = self._request_bytes(
+            f"{self._repo_path(owner, name)}/contents/{encoded_path}?ref={encoded_ref}",
+            accept="application/vnd.github.raw+json",
+            allow_not_found=True,
+        )
+        if payload is None:
+            return None
+        return payload.decode("utf-8", errors="replace")
+
     @staticmethod
     def _repo_path(owner: str, name: str) -> str:
         encoded_owner = quote(owner, safe="")
