@@ -49,3 +49,26 @@ def test_named_direct_references_and_egg_sources_are_preserved() -> None:
         ("library", "@ git+https://github.com/org/library.git"),
         ("legacy", "git+https://github.com/org/legacy.git#egg=legacy"),
     }
+
+
+def test_poetry_empty_or_whitespace_names_do_not_hide_valid_dependencies() -> None:
+    dependencies = parse_dependency_manifest(
+        "pyproject.toml",
+        """
+[tool.poetry.dependencies]
+python = "^3.11"
+"" = "^1.0"
+"   " = "^2.0"
+requests = "^2.32"
+
+[tool.poetry.group.dev.dependencies]
+"" = "^1.0"
+pytest = "^8"
+""",
+    )
+
+    assert [(item.name, item.requirement, item.group)
+            for item in dependencies] == [
+        ("pytest", "^8", "group:dev"),
+        ("requests", "^2.32", "runtime"),
+    ]

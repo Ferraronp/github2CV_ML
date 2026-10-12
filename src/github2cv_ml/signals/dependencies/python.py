@@ -117,7 +117,7 @@ def _poetry_dependency_table(table: Any, path: str, group: str) -> list[Dependen
         return []
     dependencies: list[DependencySignal] = []
     for name, requirement in table.items():
-        if not isinstance(name, str) or name.lower() == "python":
+        if not isinstance(name, str) or not name.strip() or name.lower() == "python":
             continue
         spec: str | None
         if isinstance(requirement, str):

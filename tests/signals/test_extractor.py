@@ -166,3 +166,29 @@ def test_only_supported_manifest_paths_are_requested() -> None:
         "services/api/pyproject.toml",
         "web/package.json",
     ]
+
+
+def test_nested_github_workflow_yaml_is_not_classified_as_actions() -> None:
+    tree = [
+        _file(".github/workflows/templates/ci.yml"),
+        _file(".github/workflows/docs/example.yaml"),
+        _file(".github/workflows/ci.yml"),
+        _file(".github/workflows/build.yaml"),
+        _file("ci.yml"),
+    ]
+
+    signals = extract_repository_signals(tree, {})
+
+    assert [(item.kind, item.path) for item in signals.tooling] == [
+        (ToolingKind.GITHUB_ACTIONS, ".github/workflows/build.yaml"),
+        (ToolingKind.GITHUB_ACTIONS, ".github/workflows/ci.yml"),
+    ]
+
+
+def test_only_nested_github_workflows_produce_no_actions_signal() -> None:
+    signals = extract_repository_signals(
+        [_file(".github/workflows/templates/ci.yml")],
+        {},
+    )
+
+    assert signals.tooling == []

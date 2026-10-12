@@ -93,6 +93,6 @@ def _tooling_kind_for_path(path: str) -> ToolingKind | None:
         return ToolingKind.DOCKERFILE
     if name in _COMPOSE_FILENAMES:
         return ToolingKind.DOCKER_COMPOSE
-    if path.startswith(".github/workflows/") and name.endswith((".yml", ".yaml")):
+    if pure_path.parent == PurePosixPath(".github/workflows") and name.endswith((".yml", ".yaml")):
         return ToolingKind.GITHUB_ACTIONS
     return None

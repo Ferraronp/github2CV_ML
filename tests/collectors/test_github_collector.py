@@ -237,3 +237,39 @@ def test_collect_skips_bare_vcs_urls_and_keeps_requirements_duplicates_safe() ->
         ("requests", None),
         ("requests", ">=2"),
     ]
+
+
+def test_collect_ignores_invalid_manifest_entries_and_nested_workflows() -> None:
+    collector = GitHubRepositoryCollector(
+        client=FakeGitHubClient(
+            tree={
+                "tree": [
+                    {"path": "web/package.json", "type": "blob", "size": 150},
+                    {"path": "pyproject.toml", "type": "blob", "size": 150},
+                    {
+                        "path": ".github/workflows/templates/ci.yml",
+                        "type": "blob",
+                        "size": 30,
+                    },
+                ],
+                "truncated": False,
+            },
+            files={
+                "web/package.json": '{"dependencies": {"": "^1.0", "react": "^19"}}',
+                "pyproject.toml": (
+                    '[tool.poetry.dependencies]\n'
+                    '"" = "^1.0"\n'
+                    'requests = "^2.32"\n'
+                ),
+            },
+        )
+    )
+
+    snapshot = collector.collect("octocat/hello-world")
+
+    assert {(dep.name, dep.requirement) for dep in snapshot.signals.dependencies} == {
+        ("react", "^19"),
+        ("requests", "^2.32"),
+    }
+    assert snapshot.signals.tooling == []
+    assert len(snapshot.signals.manifests) == 2

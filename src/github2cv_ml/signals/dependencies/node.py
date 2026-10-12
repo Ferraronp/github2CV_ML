@@ -28,7 +28,7 @@ def parse_package_json(path: str, content: str) -> list[DependencySignal]:
         if not isinstance(table, dict):
             continue
         for name, requirement in table.items():
-            if not isinstance(name, str) or not isinstance(requirement, str):
+            if not isinstance(name, str) or not name.strip() or not isinstance(requirement, str):
                 continue
             dependencies.append(
                 DependencySignal(
