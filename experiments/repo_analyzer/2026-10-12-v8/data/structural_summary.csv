@@ -1,0 +1,10 @@
+model_id,strict_structural_pass_of_14,fence_normalized_pass_of_14
+qwen35-9b-q8,11,11
+llama31-8b-q4,1,11
+qwen25coder-7b-q4,0,11
+qwen25coder-3b-q4,0,10
+qwen35-9b-q4,9,9
+llama32-3b-q4,1,7
+qwen35-4b-q4,6,7
+qwen35-2b-q4,4,4
+gemma3-4b-q4,0,2phi4mini-q4,0,0
