@@ -1,0 +1,11 @@
+model_id,t4_gpu_process_total_peak_gib,context_tokens,full_gpu_offload
+qwen35-2b-q4,1.865,8192,true
+qwen35-4b-q4,3.346,8192,true
+llama32-3b-q4,2.730,8192,true
+gemma3-4b-q4,3.133,8192,true
+qwen25coder-3b-q4,2.373,8192,true
+qwen25coder-7b-q4,4.744,8192,true
+llama31-8b-q4,5.227,8192,true
+qwen35-9b-q4,5.562,8192,true
+qwen35-9b-q8,8.668,8192,true
+phi4mini-q4,,8192,false
