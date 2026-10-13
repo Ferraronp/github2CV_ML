@@ -7,4 +7,5 @@ qwen35-9b-q4,9,9
 llama32-3b-q4,1,7
 qwen35-4b-q4,6,7
 qwen35-2b-q4,4,4
-gemma3-4b-q4,0,2phi4mini-q4,0,0
+gemma3-4b-q4,0,2
+phi4mini-q4,0,0
