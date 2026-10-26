@@ -95,14 +95,25 @@ cached and is not executed twice; a different requested range that resolves
 to already analyzed source lines is now also rejected **without another
 extractor call**.
 
-After three consecutive recoverable tool errors, the orchestration layer
-performs one deterministic `read_file` on an unvisited plan candidate.
-That recovery uses the same safe GitHub browser, source isolation and evidence
-validator as a model-requested read. The trace marks it with
-`origin=automatic_recovery`. If no unvisited planned candidate remains,
-the agent stops with `status=stalled` and preserves all prior evidence.
-Total tool errors are capped at 24 even when successes interrupt the
-streak; the 100-step run cannot silently spend 90 errors again.
+The orchestration layer now triggers deterministic recovery after **one
+duplicate/already-inspected read**, three consecutive tool errors, or three
+steps without a new successful source read (including otherwise successful
+navigation). A single duplicate search/list call remains recoverable by the
+model; it does not immediately trigger fallback. The explorer instructions
+prioritize unread planned files rather than restarting navigation every turn.
+
+Recovery reads the next unread planned candidate using the same pinned,
+read-only browser, isolated extractor and evidence validation as an ordinary
+read. If the first 120 lines exceed the 12K character limit, the controller
+halves the requested range until it fits, or skips an unreadable candidate.
+The trace records `origin=automatic_recovery` and `recovery_reason`.
+If no readable unvisited planned file remains, the agent stops with
+`status=stalled` and preserves partial evidence. Total tool errors remain
+capped at 24, including failures interrupted by successful navigation.
+
+These are **progress and stop guarantees**, not guarantees of full repository
+coverage or correct semantic evidence. A real Qwen/Colab run is still needed
+to measure improvements in tool behavior and useful observations.
 
 These guards **do not** assert that extracted claims are semantically correct.
 The extractor prompt now distinguishes tests/deployment from HTTP handling,
