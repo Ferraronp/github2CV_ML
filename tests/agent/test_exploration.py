@@ -517,7 +517,7 @@ def test_unreadable_recovery_candidate_does_not_block_next_planned_file():
         ("finish_analysis", {}),
     ])
     browser = RepositoryBrowser(
-        FakeClient({"src/pipeline.py": "binary\\x00code"}),
+        FakeClient({"src/pipeline.py": "binary\x00code"}),
         snapshot(paths), SHA,
     )
     result = RepoAnalyzer(model, browser, max_steps=10, max_read_calls=2).run()
