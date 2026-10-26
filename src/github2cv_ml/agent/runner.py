@@ -99,7 +99,9 @@ class LocalOpenAIModel:
             "stream": False,
         }
         if tools is not None:
-            payload.update(tools=tools, tool_choice="auto", parallel_tool_calls=False)
+            # Explorer must use one of its read-only tools, including finish_analysis.
+            # OpenAI-compatible llama-server accepts the string "required" mode.
+            payload.update(tools=tools, tool_choice="required", parallel_tool_calls=False)
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         request = Request(
@@ -306,8 +308,22 @@ class RepoAnalyzer:
                 break
             calls = reply.get("tool_calls")
             if calls is None or calls == []:
+                # Some llama.cpp/templates treat tool_choice=required as advisory.
+                # Keep a bounded diagnostic sample rather than losing the response.
                 status = "model_stopped_without_tool"
-                warnings.append("Explorer returned no function call; tool support may be unavailable")
+                raw_content = reply.get("content")
+                preview = raw_content[:400] if isinstance(raw_content, str) else ""
+                trace.append({
+                    "step": step + 1,
+                    "tool": None,
+                    "status": "error",
+                    "error": "Model returned no tool_calls",
+                    "response_preview": preview,
+                })
+                warnings.append(
+                    "Explorer returned no function call despite tool_choice=required; "
+                    "inspect tool_trace and llama-server chat template"
+                )
                 break
             if (
                 not isinstance(calls, list) or not isinstance(calls[0], dict)

@@ -193,7 +193,7 @@ def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
     }}])
     assert response["tool_calls"][0]["function"]["name"] == "list_files"
     assert requests[0]["parallel_tool_calls"] is False
-    assert requests[0]["tool_choice"] == "auto"
+    assert requests[0]["tool_choice"] == "required"
     assert requests[0]["model"] == "qwen-coder"
     assert requests[0]["messages"] == prompt
 
@@ -338,3 +338,20 @@ def test_cli_writes_incomplete_json_and_markdown_when_model_is_down(tmp_path, mo
     assert saved["tool_trace"][0]["status"] == "error"
     assert "model call failed" in " ".join(saved["warnings"]).lower()
     assert "Status: `incomplete`" in report
+
+
+def test_no_tool_call_records_model_content_for_diagnostics():
+    class PlainTextExplorer:
+        def complete(self, messages, *, tools=None, json_mode=False):
+            if tools is not None:
+                return {"content": "I'll inspect the files first, but no tool call."}
+            return {"content": '{"project_summary": "README only", "project_type": null}'}
+
+    result = RepoAnalyzer(
+        PlainTextExplorer(), RepositoryBrowser(FakeGitHub(), make_snapshot(), SHA)
+    ).run()
+    assert result.status == "model_stopped_without_tool"
+    assert not result.evidence
+    assert result.tool_trace[0]["error"] == "Model returned no tool_calls"
+    assert "inspect the files" in result.tool_trace[0]["response_preview"]
+    assert "tool_choice=required" in " ".join(result.warnings)

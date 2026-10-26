@@ -126,6 +126,24 @@ tool dispatch, read isolation, SHA pinning, evidence range validation,
 unsafe path rejection, malformed tool arguments, endpoint outages, incomplete
 report persistence, budget checks and remote inference opt-in.
 
+### No `tool_calls` returned by a real model
+
+The first Colab smoke produced `status=model_stopped_without_tool`,
+zero `file_summaries`, zero `evidence`, and a metadata-only final summary.
+That means the collector and final summary ran, **not** that the model
+successfully inspected source code.
+
+The Explorer now requests `tool_choice="required"` from `llama-server`.
+This is stronger than `auto`, but some server/template combinations may
+still return plain text. When that happens, the agent records a bounded
+`tool_trace[].response_preview` for diagnosis instead of silently
+ending with no trace. The preview may contain model-generated sensitive
+text, so handle output artifacts accordingly.
+
+Use the notebook's tool-calling diagnostic to check the response and
+the server log's chat template. If forced tool calling still fails, the
+model/server/template needs investigation, not a claim that the MVP passed.
+
 ### Actual-model smoke test still needed
 
 Run the above CLI against at least one public GitHub repo with
