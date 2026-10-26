@@ -384,14 +384,12 @@ def test_backend_plan_prefers_business_logic_over_routers_and_tests():
     assert build_exploration_plan(paths, limit=7) == chosen
 
 
-def test_repeated_error_triggers_bounded_recovery_with_real_file_extraction():
+def test_duplicate_read_immediately_recovers_to_next_planned_module():
     paths = [
         "src/main.py", "src/auth/service.py", "src/common/security.py",
     ]
     repeated = {"path": "src/main.py", "start_line": 1, "end_line": 2}
     model = SequenceModel([
-        ("read_file", repeated),
-        ("read_file", repeated),
         ("read_file", repeated),
         ("read_file", repeated),
         ("finish_analysis", {}),
@@ -401,23 +399,22 @@ def test_repeated_error_triggers_bounded_recovery_with_real_file_extraction():
         max_steps=100, max_read_calls=3,
     ).run()
     assert result.status == "completed"
-    assert len(model.explorer_states) == 5
+    assert len(model.explorer_states) == 3
     assert [entry["status"] for entry in result.tool_trace] == [
-        "ok", "error", "error", "error", "ok", "ok",
+        "ok", "error", "ok", "ok",
     ]
-    assert result.tool_trace[4]["origin"] == "automatic_recovery"
-    assert result.tool_trace[4]["arguments"]["path"] == "src/auth/service.py"
+    assert result.tool_trace[2]["origin"] == "automatic_recovery"
+    assert result.tool_trace[2]["recovery_reason"] == "duplicate_source"
+    assert result.tool_trace[2]["arguments"]["path"] == "src/auth/service.py"
     assert {item["path"] for item in result.file_summaries} == {
         "src/main.py", "src/auth/service.py",
     }
     assert len(result.evidence) == 2
 
 
-def test_no_unvisited_planned_file_stops_after_three_errors_not_100():
+def test_no_unvisited_planned_file_stops_after_one_duplicate():
     repeated = {"path": "src/retrieval.py", "start_line": 1, "end_line": 2}
     model = SequenceModel([
-        ("read_file", repeated),
-        ("read_file", repeated),
         ("read_file", repeated),
         ("read_file", repeated),
     ])
@@ -426,10 +423,10 @@ def test_no_unvisited_planned_file_stops_after_three_errors_not_100():
         max_steps=100, max_read_calls=10,
     ).run()
     assert result.status == "stalled"
-    assert len(model.explorer_states) == 4
-    assert len(result.tool_trace) == 4
+    assert len(model.explorer_states) == 2
+    assert len(result.tool_trace) == 2
     assert len(result.evidence) == 1
-    assert "no unvisited planned file" in " ".join(result.warnings)
+    assert "no readable unvisited planned file" in " ".join(result.warnings)
 
 
 def test_different_requested_ranges_do_not_reextract_same_source_lines():
@@ -445,9 +442,85 @@ def test_different_requested_ranges_do_not_reextract_same_source_lines():
         model, RepositoryBrowser(client, snapshot(["src/retrieval.py"]), SHA),
         max_steps=20, max_read_calls=3,
     ).run()
-    assert result.status == "completed"
+    assert result.status == "stalled"
+    assert len(model.explorer_states) == 2
     assert len(result.file_summaries) == 1
     assert len(result.evidence) == 1
     assert result.tool_trace[1]["status"] == "error"
     assert "Source lines already inspected" in result.tool_trace[1]["error"]
     assert len(client.refs) == 1
+
+
+def test_perpetually_repeated_tool_call_cannot_consume_100_steps():
+    paths = ["src/pipeline.py", "src/retrieval.py", "src/generation.py"]
+    repeated = {"path": "src/pipeline.py", "start_line": 1, "end_line": 2}
+    model = SequenceModel([("read_file", repeated)] * 100)
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(FakeClient(), snapshot(paths), SHA),
+        max_steps=100, max_read_calls=3,
+    ).run()
+    assert result.status == "read_budget_exhausted"
+    assert len(model.explorer_states) == 3
+    assert len(result.file_summaries) == 3
+    assert {entry["path"] for entry in result.file_summaries} == set(paths)
+    assert [entry["status"] for entry in result.tool_trace] == [
+        "ok", "error", "ok", "error", "ok",
+    ]
+
+
+def test_successful_but_unproductive_navigation_recovers_after_three_steps():
+    paths = ["src/pipeline.py", "src/retrieval.py"]
+    model = SequenceModel([
+        ("list_files", {"path": "src", "limit": 1}),
+        ("list_files", {"path": "src", "limit": 2}),
+        ("search_code", {"query": "missing", "path": "src"}),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(FakeClient(), snapshot(paths), SHA),
+        max_steps=20, max_read_calls=2,
+    ).run()
+    assert result.status == "completed"
+    assert len(model.explorer_states) == 4
+    assert len(result.file_summaries) == 1
+    assert result.tool_trace[3]["origin"] == "automatic_recovery"
+    assert result.tool_trace[3]["recovery_reason"] == "no_source_progress"
+    assert result.tool_trace[3]["arguments"]["path"] == "src/pipeline.py"
+
+
+def test_recovery_shrinks_range_when_120_lines_exceed_character_limit():
+    path = "src/pipeline.py"
+    # Fits the file byte limit, but its first 120 lines exceed 12K chars.
+    content = ("dense_search(query) " + "x" * 200 + "\n") * 90
+    model = SequenceModel([
+        ("list_files", {"limit": 1}),
+        ("list_files", {"limit": 2}),
+        ("search_code", {"query": "missing"}),
+        ("finish_analysis", {}),
+    ])
+    browser = RepositoryBrowser(FakeClient({path: content}), snapshot([path]), SHA)
+    result = RepoAnalyzer(model, browser, max_steps=20, max_read_calls=1).run()
+    assert result.status == "read_budget_exhausted"
+    assert len(result.file_summaries) == 1
+    recovered = result.tool_trace[3]
+    assert recovered["origin"] == "automatic_recovery"
+    assert 1 <= recovered["arguments"]["end_line"] < 120
+    assert len(result.evidence) == 1
+
+
+def test_unreadable_recovery_candidate_does_not_block_next_planned_file():
+    paths = ["src/pipeline.py", "src/retrieval.py"]
+    model = SequenceModel([
+        ("list_files", {"limit": 1}),
+        ("list_files", {"limit": 2}),
+        ("search_code", {"query": "missing"}),
+        ("finish_analysis", {}),
+    ])
+    browser = RepositoryBrowser(
+        FakeClient({"src/pipeline.py": "binary\\x00code"}),
+        snapshot(paths), SHA,
+    )
+    result = RepoAnalyzer(model, browser, max_steps=10, max_read_calls=2).run()
+    assert result.status == "completed"
+    assert [entry["path"] for entry in result.file_summaries] == ["src/retrieval.py"]
+    assert "Recovery skipped src/pipeline.py" in " ".join(result.warnings)
