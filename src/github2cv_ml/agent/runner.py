@@ -180,6 +180,8 @@ class RepoAnalyzer:
             ],
             json_mode=True,
         )
+        if not isinstance(message, dict):
+            raise ValueError("Extractor returned a malformed response")
         payload = _json_object(message.get("content") or "")
         summary = payload.get("file_summary")
         if not isinstance(summary, str):
@@ -244,6 +246,8 @@ class RepoAnalyzer:
                 ],
                 json_mode=True,
             )
+            if not isinstance(response, dict):
+                raise ValueError("Final summary model returned a malformed response")
             value = _json_object(response.get("content") or "")
             summary = value.get("project_summary")
             project_type = value.get("project_type")
@@ -276,20 +280,48 @@ class RepoAnalyzer:
                 "remaining_steps": self.max_steps - step,
                 "remaining_read_calls": self.max_read_calls - read_calls,
             }
-            reply = self.model.complete(
-                [
-                    {"role": "system", "content": EXPLORER_PROMPT},
-                    {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
-                ],
-                tools=EXPLORER_TOOLS,
-            )
-            calls = reply.get("tool_calls") or []
-            if not calls:
+            try:
+                reply = self.model.complete(
+                    [
+                        {"role": "system", "content": EXPLORER_PROMPT},
+                        {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
+                    ],
+                    tools=EXPLORER_TOOLS,
+                )
+            except Exception as exc:
+                # An unavailable local model must not discard previously extracted evidence.
+                status = "incomplete"
+                warnings.append(f"Explorer model call failed ({type(exc).__name__})")
+                trace.append({
+                    "step": step + 1, "tool": None, "status": "error",
+                    "error": f"Model request failed ({type(exc).__name__})",
+                })
+                break
+
+            if not isinstance(reply, dict):
+                status = "incomplete"
+                warnings.append("Explorer model response was not an object")
+                trace.append({"step": step + 1, "tool": None, "status": "error",
+                              "error": "Malformed model response"})
+                break
+            calls = reply.get("tool_calls")
+            if calls is None or calls == []:
                 status = "model_stopped_without_tool"
                 warnings.append("Explorer returned no function call; tool support may be unavailable")
                 break
-            call = calls[0].get("function") or {}
-            name = call.get("name")
+            if (
+                not isinstance(calls, list) or not isinstance(calls[0], dict)
+                or not isinstance(calls[0].get("function"), dict)
+                or not isinstance(calls[0]["function"].get("name"), str)
+            ):
+                status = "incomplete"
+                warnings.append("Explorer returned malformed tool_calls")
+                trace.append({"step": step + 1, "tool": None, "status": "error",
+                              "error": "Malformed tool call structure"})
+                break
+
+            call = calls[0]["function"]
+            name = call["name"]
             try:
                 args = call.get("arguments", "{}")
                 if isinstance(args, str):
@@ -333,7 +365,7 @@ class RepoAnalyzer:
                     raise ValueError(f"Unsupported tool: {name}")
                 trace.append({"step": step + 1, "tool": name, "arguments": args,
                               "status": "ok", "result": value})
-            except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
                 trace.append({"step": step + 1, "tool": name, "arguments": args if "args" in locals() else {},
                               "status": "error", "error": str(exc)[:200]})
         summary, project_type = self._final_summary(list(evidence.values()))

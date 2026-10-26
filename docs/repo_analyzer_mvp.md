@@ -68,9 +68,14 @@ reduces unchecked citations but does not eliminate hallucinations. The final
 
 ### Safety and budgets
 
-The tools do not expose shell commands or file writes. Only text files in the frozen
-file tree can be opened; environment/secrets, binary artifacts, large files, generated
-directories and traversal paths are excluded. Source files are not executed.
+The tools do not expose shell commands or file writes. The browser uses an
+**allowlist of known source-code extensions** (Python, JS/TS, Go, Rust, Java,
+Kotlin, C/C++, C#, Ruby and PHP); unknown formats, configuration files
+(`.npmrc`, `.pypirc`, `.netrc`, `pip.conf`), environment files, binary
+artifacts, large files and generated directories are excluded. Source files
+are not executed. This is **not a guarantee that source code itself contains
+no embedded secrets**. Treat private repositories and remote model endpoints
+as sensitive; do not assume the filter is sufficient for untrusted private data.
 Per run: default 12 Explorer steps, 6 read calls, 120 lines/read,
 80 KB/file, 12K characters/read, 25 distinct fetched files, 12 files/scanned search and 12 search matches.
 Search is **partial**, not a guarantee of finding every occurrence.
@@ -78,6 +83,10 @@ Search is **partial**, not a guarantee of finding every occurrence.
 Repository source and README are treated as untrusted data, never as agent instructions.
 The model can terminate early, exhaust the budget or return malformed tool calls; such
 runs are explicitly marked as incomplete rather than silently counted as success.
+If an LLM request fails or it returns malformed tool calls, `RepoAnalyzer.run()`
+keeps any already-extracted evidence and records an `incomplete` status
+with a warning; the CLI still writes `analysis.json` and `report.md`.
+Missing/invalid tool arguments are recorded as recoverable tool errors.
 Model prompts and tool metadata will be logged in the output, so avoid committing reports
 containing private repository content.
 
@@ -90,7 +99,8 @@ python -m pytest
 
 Unit tests use a deterministic fake model (no GPU/network), verifying
 tool dispatch, read isolation, SHA pinning, evidence range validation,
-unsafe path rejection, budget checks and remote inference opt-in.
+unsafe path rejection, malformed tool arguments, endpoint outages, incomplete
+report persistence, budget checks and remote inference opt-in.
 
 ### Actual-model smoke test still needed
 

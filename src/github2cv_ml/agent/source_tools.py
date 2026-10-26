@@ -12,31 +12,47 @@ _SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
     ".next", ".tox", "vendor", "coverage", ".mypy_cache", ".pytest_cache",
 }
-_SKIP_SUFFIXES = {
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip", ".gz",
-    ".woff", ".woff2", ".ttf", ".ico", ".mp4", ".mp3", ".onnx",
-    ".gguf", ".pt", ".pth", ".bin", ".parquet", ".csv", ".lock",
-    ".pem", ".key", ".p12", ".pfx", ".crt", ".db", ".sqlite",
+# Source-code only: configuration files and unknown formats are not exposed to the model.
+# This cannot guarantee that a source file contains no hard-coded credentials.
+_SOURCE_SUFFIXES = {
+    ".py", ".pyi", ".go", ".js", ".jsx", ".ts", ".tsx", ".rs",
+    ".java", ".kt", ".kts", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs",
+    ".rb", ".php",
 }
-_SKIP_NAMES = {".env", ".env.local", ".env.production", "id_rsa", "id_ed25519"}
+_CREDENTIAL_NAMES = {
+    ".env", ".env.local", ".env.production", ".npmrc", ".pypirc",
+    ".netrc", "pip.conf", "id_rsa", "id_ed25519",
+}
 _PRIORITY = {".py": 0, ".go": 1, ".ts": 2, ".tsx": 3, ".js": 4, ".rs": 5}
 
 
+def _allowed_path_parts(path: str) -> bool:
+    """Validate an untrusted repository-relative path or directory prefix."""
+    if not isinstance(path, str) or not path or "\x00" in path or "\\" in path:
+        return False
+    if path.startswith("/") or "//" in path:
+        return False
+    parts = path.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return False
+    if any(part.lower() in _SKIP_DIRS for part in parts):
+        return False
+    for part in parts:
+        lower = part.lower()
+        if lower in _CREDENTIAL_NAMES or lower.startswith(".env."):
+            return False
+        if "secret" in lower or "credential" in lower or "private" in lower:
+            return False
+        if lower.endswith((".token", ".pem", ".key", ".p12", ".pfx")):
+            return False
+    return True
+
+
 def allowed_source_path(path: str) -> bool:
-    """Reject secrets, binary/artifact paths and unsafe path traversal."""
-    if not path or "\x00" in path or "\\" in path:
+    """Allow known source-code extensions only; reject credentials/configs."""
+    if not _allowed_path_parts(path):
         return False
-    parts = PurePosixPath(path).parts
-    if path.startswith("/") or any(p in {".", ".."} for p in parts):
-        return False
-    if any(p.lower() in _SKIP_DIRS for p in parts):
-        return False
-    name = parts[-1].lower()
-    if name in _SKIP_NAMES or name.startswith(".env.") or "secret" in name:
-        return False
-    if "credential" in name or name.endswith((".token", ".bak")):
-        return False
-    return PurePosixPath(path).suffix.lower() not in _SKIP_SUFFIXES
+    return PurePosixPath(path).suffix.lower() in _SOURCE_SUFFIXES
 
 
 @dataclass
@@ -69,6 +85,8 @@ class RepositoryBrowser:
         }
 
     def _load(self, path: str) -> list[str]:
+        if not isinstance(path, str):
+            raise ValueError("File path must be a string")
         if path not in self._files:
             raise ValueError("File is absent from the frozen safe file tree")
         if path in self._cache:
@@ -89,8 +107,10 @@ class RepositoryBrowser:
         return self._cache[path]
 
     def list_files(self, path: str = "") -> dict[str, Any]:
+        if not isinstance(path, str):
+            raise ValueError("Directory path must be a string")
         path = path.strip("/")
-        if path and (not allowed_source_path(path) or ".." in path.split("/")):
+        if path and not _allowed_path_parts(path):
             raise ValueError("Invalid directory")
         paths = sorted(
             (p for p in self._files if not path or p.startswith(path + "/")),

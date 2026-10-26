@@ -6,7 +6,7 @@ import pytest
 
 from github2cv_ml.agent.runner import LocalOpenAIModel, RepoAnalyzer
 from github2cv_ml.agent.source_tools import RepositoryBrowser, allowed_source_path
-from github2cv_ml.domain.repository import RepoSnapshot
+from github2cv_ml.domain.repository import RepoSnapshot, RepoTreeEntry, RepoTreeEntryKind
 
 SHA = "a" * 40
 CODE = "\n".join(
@@ -196,3 +196,145 @@ def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
     assert requests[0]["tool_choice"] == "auto"
     assert requests[0]["model"] == "qwen-coder"
     assert requests[0]["messages"] == prompt
+
+
+@pytest.mark.parametrize(
+    "blocked_path",
+    [
+        ".npmrc", ".pypirc", ".netrc", "pip.conf",
+        "src/.npmrc", "config/.pypirc", "home/.netrc", "config/pip.conf",
+        "src/.env.production", "src/credentials.py", "src/secret_settings.py",
+        "src/config.yaml", "src/random.json", "src/unknown_extension",
+    ],
+)
+def test_secret_or_config_paths_never_reach_github_client(blocked_path):
+    snapshot = make_snapshot()
+    snapshot.file_tree.append(
+        RepoTreeEntry(path=blocked_path, kind=RepoTreeEntryKind.FILE, size=24)
+    )
+    github = FakeGitHub()
+    browser = RepositoryBrowser(github, snapshot, SHA)
+    assert not allowed_source_path(blocked_path)
+    assert blocked_path not in browser.list_files()["files"]
+    with pytest.raises(ValueError):
+        browser.read_file(blocked_path, 1, 1)
+    browser.search_code("password")
+    assert all(path != blocked_path for path, _ in github.refs)
+
+
+@pytest.mark.parametrize("bad_path", [None, 42, [], {}])
+def test_bad_list_files_path_is_a_recoverable_value_error(bad_path):
+    browser = RepositoryBrowser(FakeGitHub(), make_snapshot(), SHA)
+    with pytest.raises(ValueError, match="must be a string"):
+        browser.list_files(bad_path)
+
+
+@pytest.mark.parametrize("bad_path", [None, 42, [], {}])
+def test_bad_read_file_path_is_a_recoverable_value_error(bad_path):
+    browser = RepositoryBrowser(FakeGitHub(), make_snapshot(), SHA)
+    with pytest.raises(ValueError, match="must be a string"):
+        browser.read_file(bad_path, 1, 1)
+
+
+def test_invalid_tool_arguments_are_recorded_and_explorer_can_continue():
+    model = FakeModel()
+    model.tools = iter([
+        ("list_files", {"path": None}),
+        ("list_files", {"path": 42}),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(model, RepositoryBrowser(FakeGitHub(), make_snapshot(), SHA)).run()
+    assert result.status == "completed"
+    assert [a["status"] for a in result.tool_trace] == ["error", "error", "ok"]
+    assert all("must be a string" in a["error"] for a in result.tool_trace[:2])
+
+
+def test_explorer_endpoint_failure_preserves_partial_evidence():
+    class FailingExplorer(FakeModel):
+        def __init__(self):
+            super().__init__()
+            self.explorer_calls = 0
+
+        def complete(self, messages, *, tools=None, json_mode=False):
+            if tools is not None:
+                self.explorer_calls += 1
+                if self.explorer_calls == 3:
+                    raise RuntimeError("llama-server unavailable")
+            return super().complete(messages, tools=tools, json_mode=json_mode)
+
+    result = RepoAnalyzer(
+        FailingExplorer(), RepositoryBrowser(FakeGitHub(), make_snapshot(), SHA)
+    ).run()
+    assert result.status == "incomplete"
+    assert len(result.evidence) == 1
+    assert result.file_summaries[0]["accepted"] == 1
+    assert result.tool_trace[-1]["status"] == "error"
+    assert "model call failed" in " ".join(result.warnings).lower()
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"tool_calls": [None]},
+        {"tool_calls": ["bad"]},
+        {"tool_calls": {"wrong": "shape"}},
+        {"tool_calls": [{"function": "bad"}]},
+        {"tool_calls": [{"function": {"name": None, "arguments": "{}"}}]},
+        ["not a response object"],
+    ],
+)
+def test_malformed_tool_calls_return_incomplete_result(malformed):
+    class MalformedExplorer:
+        def complete(self, messages, *, tools=None, json_mode=False):
+            if tools is not None:
+                return malformed
+            return {"content": '{"project_summary": "Fallback", "project_type": null}'}
+
+    result = RepoAnalyzer(
+        MalformedExplorer(), RepositoryBrowser(FakeGitHub(), make_snapshot(), SHA)
+    ).run()
+    assert result.status == "incomplete"
+    assert result.tool_trace[-1]["status"] == "error"
+    assert result.warnings
+    assert result.evidence == []
+
+
+def test_cli_writes_incomplete_json_and_markdown_when_model_is_down(tmp_path, monkeypatch):
+    import github2cv_ml.agent.cli as cli
+
+    class StubClient:
+        def __init__(self, token=None):
+            self.token = token
+
+        def get_repository(self, owner, name):
+            return {"default_branch": "main"}
+
+        def get_branch_head_sha(self, owner, name, branch):
+            return SHA
+
+    class StubCollector:
+        def __init__(self, client):
+            pass
+
+        def collect(self, repository, *, commit_sha):
+            return make_snapshot()
+
+    class OfflineModel:
+        def __init__(self, **kwargs):
+            pass
+
+        def complete(self, messages, *, tools=None, json_mode=False):
+            raise RuntimeError("llama-server is unavailable")
+
+    monkeypatch.setattr(cli, "GitHubApiClient", StubClient)
+    monkeypatch.setattr(cli, "GitHubRepositoryCollector", StubCollector)
+    monkeypatch.setattr(cli, "LocalOpenAIModel", OfflineModel)
+
+    out = tmp_path / "incomplete-analysis"
+    assert cli.main(["example/repo", "--output", str(out)]) == 0
+    saved = json.loads((out / "analysis.json").read_text())
+    report = (out / "report.md").read_text()
+    assert saved["status"] == "incomplete"
+    assert saved["tool_trace"][0]["status"] == "error"
+    assert "model call failed" in " ".join(saved["warnings"]).lower()
+    assert "Status: `incomplete`" in report
