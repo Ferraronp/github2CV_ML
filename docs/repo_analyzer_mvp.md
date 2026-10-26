@@ -10,6 +10,30 @@ Explorer context.
 Repo Analyzer.** In particular, the model's JSON/function-calling reliability on the actual
 GTX 1660 Super still needs to be measured.
 
+## Colab: реальная проверка Qwen2.5-Coder 7B Q4
+
+[**Открыть smoke notebook в Google Colab**](https://colab.research.google.com/github/Ferraronp/github2CV_ML/blob/feat/repo-analyzer-toolcalling-mvp/notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb)
+
+[Исходный ноутбук в PR #27](../notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb).
+
+В Colab переключи runtime на GPU (T4), затем выполни ячейки сверху вниз.
+Ноутбук клонирует ветку PR, устанавливает пакет, загружает ту же
+Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF, что использовалась в v8 benchmark,
+разворачивает проверенный по SHA-256 CUDA prebuilt llama-server, выполняет
+отдельный diagnostic tool call и запускает **реальный** Repo Analyzer CLI
+на публичном `Ferraronp/military-charters-rag`.
+
+Итог: `analysis.json`, `report.md`, история инструментов, счётчики
+успешных `read_file` и evidence с прямыми ссылками на GitHub, ZIP для
+ручного скачивания. `status=completed` **не** гарантирует семантическую
+правильность claims; проверь хотя бы несколько ссылок вручную. Для
+`status=incomplete` проверь `tool_trace` и `llama-server.log`.
+
+**Не тестировалось на реальном GPU в CI:** автоматические проверки гарантируют
+формат ноутбука, но не качество function calling Qwen или совместимость
+выделенной Colab GPU/драйвера с CUDA 12.8. Не отправляй приватный код
+в небезопасную среду; фильтр файлов не исключает секреты внутри .py/.js.
+
 ## Local model setup
 
 Use a recent `llama.cpp` build with OpenAI-compatible tool calling enabled. For example:
