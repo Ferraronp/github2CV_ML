@@ -584,3 +584,34 @@ def test_unvisited_planned_file_still_reports_stalled_when_unreadable():
     assert result.status == "stalled"
     assert result.coverage["planned_coverage_ratio"] == 0.5
     assert result.coverage["unvisited_planned_files"] == ["src/retrieval.py"]
+
+
+def test_smoke_trace_with_all_planned_reads_and_repeated_listing_is_not_stalled():
+    # Real Qwen3.5 smoke: seven successful reads, one list_files, then two
+    # repeated identical listings before the controller recovered.
+    paths = [
+        "src/pipeline.py", "src/retrieval.py", "src/generation.py",
+        "src/auth/service.py", "src/projects/repo.py",
+        "src/common/security.py", "src/main.py",
+    ]
+    listing = {"path": "src", "limit": 50}
+    model = SequenceModel([
+        *[("read_file", {"path": path, "start_line": 1, "end_line": 2})
+          for path in paths],
+        ("list_files", listing),
+        ("list_files", listing),
+        ("list_files", listing),
+    ])
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(FakeClient(), snapshot(paths), SHA),
+        max_steps=12, max_read_calls=8,
+    ).run()
+    assert result.status == "plan_covered"
+    assert result.coverage["planned_coverage_ratio"] == 1.0
+    assert len(result.file_summaries) == 7
+    assert len(model.explorer_states) == 10
+    assert len(result.tool_trace) == 10
+    assert sum(x["status"] == "error" for x in result.tool_trace) == 2
+    assert "whole-repository coverage is unknown" in " ".join(
+        result.warnings
+    ).lower()
