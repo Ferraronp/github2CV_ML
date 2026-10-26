@@ -6,7 +6,7 @@ import pytest
 
 from github2cv_ml.agent.cli import render_report
 from github2cv_ml.agent.planning import build_exploration_plan
-from github2cv_ml.agent.runner import RepoAnalyzer
+from github2cv_ml.agent.runner import RepoAnalyzer, _range_already_analyzed
 from github2cv_ml.agent.source_tools import RepositoryBrowser
 from github2cv_ml.domain.repository import RepoSnapshot
 
@@ -615,3 +615,107 @@ def test_smoke_trace_with_all_planned_reads_and_repeated_listing_is_not_stalled(
     assert "whole-repository coverage is unknown" in " ".join(
         result.warnings
     ).lower()
+
+
+@pytest.mark.parametrize(
+    ("previous", "requested", "covered"),
+    [
+        ([(1, 60), (61, 120)], (1, 120), True),
+        ([(61, 120), (1, 60)], (1, 120), True),
+        ([(1, 50), (40, 90)], (1, 90), True),
+        ([(1, 60), (62, 120)], (1, 120), False),
+        ([(1, 60), (61, 120)], (1, 121), False),
+        ([(1, 60), (61, 90)], (1, 90), True),
+        ([], (1, 120), False),
+    ],
+)
+def test_analyzed_range_union_respects_adjacency_overlap_and_gaps(
+    previous, requested, covered
+):
+    assert _range_already_analyzed(*requested, previous) is covered
+
+
+class CountingSequenceModel(SequenceModel):
+    def __init__(self, actions):
+        super().__init__(actions)
+        self.extract_calls = 0
+
+    def complete(self, messages, *, tools=None, json_mode=False):
+        if tools is None and "Extract up to five" in messages[0]["content"]:
+            self.extract_calls += 1
+        return super().complete(messages, tools=tools, json_mode=json_mode)
+
+
+def test_union_covered_read_is_rejected_without_extractor_or_read_budget():
+    pipeline = "src/pipeline.py"
+    retrieval = "src/retrieval.py"
+    model = CountingSequenceModel([
+        ("read_file", {"path": pipeline, "start_line": 1, "end_line": 60}),
+        ("read_file", {"path": pipeline, "start_line": 61, "end_line": 120}),
+        ("read_file", {"path": pipeline, "start_line": 1, "end_line": 120}),
+        ("finish_analysis", {}),
+    ])
+    client = FakeClient({pipeline: "dense_search(query)\n" * 120})
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(client, snapshot([pipeline, retrieval]), SHA),
+        max_steps=10, max_read_calls=4,
+    ).run()
+
+    assert result.status == "completed"
+    assert model.extract_calls == 3  # 2 original fragments + recovery on retrieval
+    assert [(entry["path"], entry["line_start"], entry["line_end"])
+            for entry in result.file_summaries] == [
+        (pipeline, 1, 60), (pipeline, 61, 120), (retrieval, 1, 2),
+    ]
+    assert [entry["status"] for entry in result.tool_trace] == [
+        "ok", "ok", "error", "ok", "ok",
+    ]
+    assert "Source lines already inspected" in result.tool_trace[2]["error"]
+    assert result.tool_trace[3]["origin"] == "automatic_recovery"
+    assert result.tool_trace[3]["arguments"]["path"] == retrieval
+    assert len(client.refs) == 2  # No second fetch of cached pipeline
+
+
+def test_union_covered_request_with_eof_clamp_is_rejected():
+    path = "src/pipeline.py"
+    model = CountingSequenceModel([
+        ("read_file", {"path": path, "start_line": 1, "end_line": 60}),
+        ("read_file", {"path": path, "start_line": 41, "end_line": 120}),
+        ("read_file", {"path": path, "start_line": 1, "end_line": 120}),
+    ])
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(
+            FakeClient({path: "dense_search(query)\n" * 90}), snapshot([path]), SHA
+        ),
+        max_steps=10, max_read_calls=4,
+    ).run()
+
+    assert result.status == "plan_covered"
+    assert model.extract_calls == 2
+    assert len(result.file_summaries) == 2
+    assert result.file_summaries[1]["line_end"] == 90
+    assert [entry["status"] for entry in result.tool_trace] == [
+        "ok", "ok", "error",
+    ]
+    assert "Source lines already inspected" in result.tool_trace[2]["error"]
+
+
+def test_union_dedup_does_not_reject_an_actual_one_line_gap():
+    path = "src/pipeline.py"
+    model = CountingSequenceModel([
+        ("read_file", {"path": path, "start_line": 1, "end_line": 60}),
+        ("read_file", {"path": path, "start_line": 62, "end_line": 120}),
+        ("read_file", {"path": path, "start_line": 1, "end_line": 120}),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(
+            FakeClient({path: "dense_search(query)\n" * 120}), snapshot([path]), SHA
+        ),
+        max_steps=10, max_read_calls=4,
+    ).run()
+
+    assert result.status == "completed"
+    assert model.extract_calls == 3
+    assert len(result.file_summaries) == 3
+    assert all(item["status"] == "ok" for item in result.tool_trace)
