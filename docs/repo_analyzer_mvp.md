@@ -38,7 +38,11 @@ Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF, что использовалась в v8
 
 The Explorer now receives a **deterministic candidate exploration plan** generated
 from the safe repository file tree. The plan favors a small, role-diverse set of
-files (pipeline, retrieval, generation, entrypoint, storage, core, evaluation).
+files from implementation-relevant roles: pipeline, retrieval, generation,
+service, data access, security, infrastructure and entrypoints. Supporting
+core utilities and tests are lower priority. On the backend regression
+fixture, this favors authentication services and user repositories over
+router definitions and generic settings.
 The planner excludes paths with missing, empty, or over-limit size metadata
 because these cannot pass the browser's initial read checks; the actual content
 may still fail validation after fetching. The number of candidates is capped by
@@ -81,6 +85,31 @@ the Explorer stops without further LLM tool calls and returns
 recording the read-budget limit. This avoids repeated rejected read calls.
 If the final available step consumes the last read, the status still names
 the read-budget limit rather than the generic step budget.
+
+### Bounded loop recovery and evidence quality
+
+A real smoke on a separate FastAPI/PostgreSQL/Redis backend found **90
+duplicate tool errors in 100 Explorer steps**, despite 7/7 heuristic targets
+having been visited. A successful result from an identical call remains
+cached and is not executed twice; a different requested range that resolves
+to already analyzed source lines is now also rejected **without another
+extractor call**.
+
+After three consecutive recoverable tool errors, the orchestration layer
+performs one deterministic `read_file` on an unvisited plan candidate.
+That recovery uses the same safe GitHub browser, source isolation and evidence
+validator as a model-requested read. The trace marks it with
+`origin=automatic_recovery`. If no unvisited planned candidate remains,
+the agent stops with `status=stalled` and preserves all prior evidence.
+Total tool errors are capped at 24 even when successes interrupt the
+streak; the 100-step run cannot silently spend 90 errors again.
+
+These guards **do not** assert that extracted claims are semantically correct.
+The extractor prompt now distinguishes tests/deployment from HTTP handling,
+observability and application cleanup, and discourages assuming that middleware
+is registered simply because it was defined. Those are prompt constraints,
+not a substitute for a cross-file verifier.
+
 
 ## Local model setup
 

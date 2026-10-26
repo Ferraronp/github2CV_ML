@@ -76,3 +76,13 @@ def test_colab_classifies_read_budget_stop_as_real_exploration():
     )
     assert 'analysis["status"] == "read_budget_exhausted"' in source
     assert "not an explicit finish_analysis" in source
+
+
+def test_colab_reports_stalled_runs_and_automatic_recovery():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\\n".join(
+        "".join(cell["source"]) for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert 'analysis["status"] == "stalled"' in source
+    assert 'action.get("origin") == "automatic_recovery"' in source

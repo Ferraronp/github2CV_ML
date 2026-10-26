@@ -50,8 +50,8 @@ def test_plan_covers_distinct_candidate_roles_before_extra_files():
     result = build_exploration_plan(paths, limit=7)
     assert len(result) == 7
     assert [entry["candidate_role"] for entry in result] == [
-        "pipeline", "retrieval", "generation", "entrypoint",
-        "storage", "core", "evaluation",
+        "pipeline", "retrieval", "generation", "infrastructure",
+        "entrypoint", "core", "evaluation",
     ]
     assert result[0]["path"] == "src/ovp_rag/pipeline.py"
     assert build_exploration_plan(paths, limit=7) == result
@@ -358,3 +358,96 @@ def test_explicit_finish_still_reports_completed_when_reads_remain():
         model, browser, max_steps=5, max_read_calls=1
     ).run()
     assert result.status == "completed"
+
+
+def test_backend_plan_prefers_business_logic_over_routers_and_tests():
+    # Regresses the external FastAPI backend smoke: the old heuristic chose
+    # main, router, settings and tests while missing auth/service and user/repo.
+    paths = [
+        "src/main.py",
+        "src/auth/router.py", "src/auth/service.py",
+        "src/user/router.py", "src/user/service.py", "src/user/repo.py",
+        "src/common/security.py", "src/common/db/models.py",
+        "src/common/db/session.py", "src/common/redis/session.py",
+        "src/errors.py", "src/settings.py", "tests/test_auth.py",
+    ]
+    chosen = build_exploration_plan(paths, limit=7)
+    selected = {item["path"] for item in chosen}
+    assert len(chosen) == 7
+    assert {
+        "src/auth/service.py", "src/user/service.py", "src/user/repo.py",
+        "src/common/security.py", "src/common/db/session.py", "src/main.py",
+    } <= selected
+    assert "src/auth/router.py" not in selected
+    assert "tests/test_auth.py" not in selected
+    assert "src/settings.py" not in selected
+    assert build_exploration_plan(paths, limit=7) == chosen
+
+
+def test_repeated_error_triggers_bounded_recovery_with_real_file_extraction():
+    paths = [
+        "src/main.py", "src/auth/service.py", "src/common/security.py",
+    ]
+    repeated = {"path": "src/main.py", "start_line": 1, "end_line": 2}
+    model = SequenceModel([
+        ("read_file", repeated),
+        ("read_file", repeated),
+        ("read_file", repeated),
+        ("read_file", repeated),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(FakeClient(), snapshot(paths), SHA),
+        max_steps=100, max_read_calls=3,
+    ).run()
+    assert result.status == "completed"
+    assert len(model.explorer_states) == 5
+    assert [entry["status"] for entry in result.tool_trace] == [
+        "ok", "error", "error", "error", "ok", "ok",
+    ]
+    assert result.tool_trace[4]["origin"] == "automatic_recovery"
+    assert result.tool_trace[4]["arguments"]["path"] == "src/auth/service.py"
+    assert {item["path"] for item in result.file_summaries} == {
+        "src/main.py", "src/auth/service.py",
+    }
+    assert len(result.evidence) == 2
+
+
+def test_no_unvisited_planned_file_stops_after_three_errors_not_100():
+    repeated = {"path": "src/retrieval.py", "start_line": 1, "end_line": 2}
+    model = SequenceModel([
+        ("read_file", repeated),
+        ("read_file", repeated),
+        ("read_file", repeated),
+        ("read_file", repeated),
+    ])
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(FakeClient(), snapshot(["src/retrieval.py"]), SHA),
+        max_steps=100, max_read_calls=10,
+    ).run()
+    assert result.status == "stalled"
+    assert len(model.explorer_states) == 4
+    assert len(result.tool_trace) == 4
+    assert len(result.evidence) == 1
+    assert "no unvisited planned file" in " ".join(result.warnings)
+
+
+def test_different_requested_ranges_do_not_reextract_same_source_lines():
+    # File has only two lines. Requested 1:120 is clamped to 1:2, so
+    # a later 1:2 request should reuse evidence without extractor work.
+    model = SequenceModel([
+        ("read_file", {"path": "src/retrieval.py", "start_line": 1, "end_line": 120}),
+        ("read_file", {"path": "src/retrieval.py", "start_line": 1, "end_line": 2}),
+        ("finish_analysis", {}),
+    ])
+    client = FakeClient()
+    result = RepoAnalyzer(
+        model, RepositoryBrowser(client, snapshot(["src/retrieval.py"]), SHA),
+        max_steps=20, max_read_calls=3,
+    ).run()
+    assert result.status == "completed"
+    assert len(result.file_summaries) == 1
+    assert len(result.evidence) == 1
+    assert result.tool_trace[1]["status"] == "error"
+    assert "Source lines already inspected" in result.tool_trace[1]["error"]
+    assert len(client.refs) == 1

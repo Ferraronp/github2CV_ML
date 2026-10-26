@@ -29,6 +29,10 @@ files rather than spending the entire budget on repeated searches.
 Use list_files(offset=...) or search_code(path=..., offset=...) to see more results.
 Search is incomplete: next_offset means more candidate files were not scanned.
 Try to read at least two distinct planned modules before finish_analysis when possible.
+For backend applications, prioritize service, repository/data access, security,
+and infrastructure implementations over router declarations or config.
+Repeated tool errors will trigger a bounded deterministic recovery; adapt your
+next calls to the newest file_summaries and previous_actions.
 Tell the difference between a filename hypothesis and a supported code fact.
 If search_code returns partial results, try reading another relevant source file,
 or a different search query. Prioritize implementation in src/ over evaluation scripts.
@@ -41,6 +45,11 @@ EXTRACTOR_PROMPT = """Extract up to five concise technical observations from num
 Output one JSON object with keys file_summary (short string) and observations (array).
 Prefer 0-3 high-signal observations useful for describing engineering work in a CV:
 substantive algorithms, architecture, integrations, tests and deployment mechanisms.
+Use category "testing" only for tests or test infrastructure and "deployment"
+only for packaging, deployment or runtime infrastructure—not for HTTP error
+handling, logging, latency timing or context-manager cleanup.
+Do not claim middleware, security hooks, or endpoints are active merely from
+their definition: registration/wiring must be visible in the given lines.
 Avoid trivial imports, argparse setup, directory creation and boilerplate;
 do not turn every code line into an observation.
 Each observation has: claim, category, source_path, line_start, line_end.
@@ -290,10 +299,18 @@ class RepoAnalyzer:
             browser.source_paths(), limit=min(7, self.max_read_calls)
         )
         visited_files: set[str] = set()
+        analyzed_ranges: dict[str, list[tuple[int, int]]] = {}
         successful_calls: set[tuple[str, str]] = set()
+        attempted_recoveries: set[str] = set()
+        consecutive_tool_errors = 0
+        total_tool_errors = 0
         status = "budget_exhausted"
 
         for step in range(self.max_steps):
+            if total_tool_errors >= 24:
+                status = "stalled"
+                warnings.append("Tool error budget exhausted (24); stopped exploration")
+                break
             if read_calls >= self.max_read_calls:
                 # There is no reason to ask the model to read another file
                 # after the read budget is spent. Preserve the partial result.
@@ -318,23 +335,52 @@ class RepoAnalyzer:
                 "remaining_steps": self.max_steps - step,
                 "remaining_read_calls": self.max_read_calls - read_calls,
             }
-            try:
-                reply = self.model.complete(
-                    [
-                        {"role": "system", "content": EXPLORER_PROMPT},
-                        {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
-                    ],
-                    tools=EXPLORER_TOOLS,
-                )
-            except Exception as exc:
-                # An unavailable local model must not discard previously extracted evidence.
-                status = "incomplete"
-                warnings.append(f"Explorer model call failed ({type(exc).__name__})")
-                trace.append({
-                    "step": step + 1, "tool": None, "status": "error",
-                    "error": f"Model request failed ({type(exc).__name__})",
-                })
-                break
+            # Qwen may repeat a rejected tool call dozens of times. After
+            # three consecutive errors, make at most one deterministic,
+            # read-only recovery call to an unread planned source file. It
+            # passes through the same isolation, budgets and provenance checks
+            # as an LLM-selected read. If no useful recovery remains, stop.
+            recovery = False
+            if consecutive_tool_errors >= 3:
+                next_path = next((
+                    item["path"] for item in exploration_plan
+                    if item["path"] not in visited_files
+                    and item["path"] not in attempted_recoveries
+                ), None)
+                if next_path is None:
+                    status = "stalled"
+                    warnings.append(
+                        "Explorer stalled after repeated tool errors; "
+                        "no unvisited planned file remains for recovery"
+                    )
+                    break
+                attempted_recoveries.add(next_path)
+                recovery = True
+                consecutive_tool_errors = 0
+                reply = {"tool_calls": [{"function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({
+                        "path": next_path, "start_line": 1, "end_line": 120,
+                    }),
+                }}]}
+            else:
+                try:
+                    reply = self.model.complete(
+                        [
+                            {"role": "system", "content": EXPLORER_PROMPT},
+                            {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
+                        ],
+                        tools=EXPLORER_TOOLS,
+                    )
+                except Exception as exc:
+                    # An unavailable model must not discard extracted evidence.
+                    status = "incomplete"
+                    warnings.append(f"Explorer model call failed ({type(exc).__name__})")
+                    trace.append({
+                        "step": step + 1, "tool": None, "status": "error",
+                        "error": f"Model request failed ({type(exc).__name__})",
+                    })
+                    break
 
             if not isinstance(reply, dict):
                 status = "incomplete"
@@ -374,6 +420,7 @@ class RepoAnalyzer:
 
             call = calls[0]["function"]
             name = call["name"]
+            args: Any = None
             try:
                 args = call.get("arguments", "{}")
                 if isinstance(args, str):
@@ -414,8 +461,23 @@ class RepoAnalyzer:
                         start_line=args.get("start_line", 1),
                         end_line=args.get("end_line", 120),
                     )
+                    # GitHub ranges may be clamped at EOF. Different argument
+                    # strings can therefore refer to identical source lines.
+                    source_ranges = analyzed_ranges.get(fragment["path"], [])
+                    if any(
+                        previous_start <= fragment["start_line"]
+                        and fragment["end_line"] <= previous_end
+                        for previous_start, previous_end in source_ranges
+                    ):
+                        raise ValueError(
+                            "Source lines already inspected; read a new range "
+                            "or a different file"
+                        )
                     read_calls += 1
                     summary, claims, rejected = self._extract_file(fragment)
+                    analyzed_ranges.setdefault(fragment["path"], []).append((
+                        fragment["start_line"], fragment["end_line"],
+                    ))
                     visited_files.add(fragment["path"])
                     summaries.append({
                         "path": fragment["path"],
@@ -433,11 +495,22 @@ class RepoAnalyzer:
                 else:
                     raise ValueError(f"Unsupported tool: {name}")
                 successful_calls.add(call_key)
-                trace.append({"step": step + 1, "tool": name, "arguments": args,
-                              "status": "ok", "result": value})
+                consecutive_tool_errors = 0
+                action = {
+                    "step": step + 1, "tool": name, "arguments": args,
+                    "status": "ok", "result": value,
+                }
+                if recovery:
+                    action["origin"] = "automatic_recovery"
+                trace.append(action)
             except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
-                trace.append({"step": step + 1, "tool": name, "arguments": args if "args" in locals() else {},
-                              "status": "error", "error": str(exc)[:200]})
+                total_tool_errors += 1
+                consecutive_tool_errors += 1
+                trace.append({
+                    "step": step + 1, "tool": name,
+                    "arguments": args if isinstance(args, dict) else {},
+                    "status": "error", "error": str(exc)[:200],
+                })
         # The final allowed Explorer step may consume the last read call:
         # classify that case by the actual exhausted resource, not step count.
         if status == "budget_exhausted" and read_calls >= self.max_read_calls:
