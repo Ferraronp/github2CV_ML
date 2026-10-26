@@ -119,9 +119,13 @@ class RepositoryBrowser:
         return {"files": paths[:80], "truncated": len(paths) > 80, "total": len(paths)}
 
     @staticmethod
-    def _priority(path: str) -> tuple[int, int, str]:
+    def _priority(path: str) -> tuple[int, int, int, str]:
         suffix = PurePosixPath(path).suffix.lower()
-        return (_PRIORITY.get(suffix, 8), path.count("/"), path)
+        # Search implementation before similarly named evaluation/utility files.
+        implementation = path.startswith(
+            ("src/", "backend/", "frontend/src/", "app/", "lib/")
+        )
+        return (0 if implementation else 1, _PRIORITY.get(suffix, 8), path.count("/"), path)
 
     def search_code(self, query: str) -> dict[str, Any]:
         """Literal, case-insensitive search; no regex execution or shell access."""

@@ -103,6 +103,12 @@ as sensitive; do not assume the filter is sufficient for untrusted private data.
 Per run: default 12 Explorer steps, 6 read calls, 120 lines/read,
 80 KB/file, 12K characters/read, 25 distinct fetched files, 12 files/scanned search and 12 search matches.
 Search is **partial**, not a guarantee of finding every occurrence.
+Implementation paths under `src/` and other conventional source directories
+are scanned before similarly named evaluation utilities. Repeated **successful**
+tool calls with identical arguments are rejected as recoverable errors rather than
+re-executed; the Explorer is instructed to change the query/file/range.
+The extractor is prompted to prefer substantive engineering facts over
+boilerplate, but their relevance and semantic correctness still require review.
 
 Repository source and README are treated as untrusted data, never as agent instructions.
 The model can terminate early, exhaust the budget or return malformed tool calls; such

@@ -355,3 +355,37 @@ def test_no_tool_call_records_model_content_for_diagnostics():
     assert result.tool_trace[0]["error"] == "Model returned no tool_calls"
     assert "inspect the files" in result.tool_trace[0]["response_preview"]
     assert "tool_choice=required" in " ".join(result.warnings)
+
+
+def test_duplicate_successful_search_is_not_reexecuted():
+    model = FakeModel()
+    model.tools = iter([
+        ("search_code", {"query": "dense_search"}),
+        ("search_code", {"query": "dense_search"}),
+        ("read_file", {"path": "src/search.py", "start_line": 1, "end_line": 3}),
+        ("finish_analysis", {}),
+    ])
+    github = FakeGitHub()
+    result = RepoAnalyzer(model, RepositoryBrowser(github, make_snapshot(), SHA)).run()
+    assert result.status == "completed"
+    assert [event["status"] for event in result.tool_trace] == [
+        "ok", "error", "ok", "ok"
+    ]
+    assert "Repeated identical tool call" in result.tool_trace[1]["error"]
+    assert len(result.evidence) == 1
+    assert github.refs == [("src/search.py", SHA)]
+
+
+def test_source_implementation_ranked_before_evaluation_by_search():
+    snap = make_snapshot()
+    snap.file_tree.append(
+        RepoTreeEntry(path="evaluation/eval.py", kind=RepoTreeEntryKind.FILE, size=100)
+    )
+    github = FakeGitHub()
+    browser = RepositoryBrowser(
+        github, snap, SHA, max_search_files=1
+    )
+    matches = browser.search_code("dense_search")
+    assert matches["scanned_files"] == 1
+    assert matches["matches"][0]["path"] == "src/search.py"
+    assert github.refs == [("src/search.py", SHA)]
