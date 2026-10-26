@@ -104,16 +104,32 @@ prioritize unread planned files rather than restarting navigation every turn.
 
 Recovery reads the next unread planned candidate using the same pinned,
 read-only browser, isolated extractor and evidence validation as an ordinary
-read. If the first 120 lines exceed the 12K character limit, the controller
-halves the requested range until it fits, or skips an unreadable candidate.
-The trace records `origin=automatic_recovery` and `recovery_reason`.
-If no readable unvisited planned file remains, the agent stops with
-`status=stalled` and preserves partial evidence. Total tool errors remain
-capped at 24, including failures interrupted by successful navigation.
+read. After visiting the selected candidates, it can deepen an already-read
+planned module by reading its first *uninspected* source range, if budgets
+allow. In either case the controller shrinks oversized excerpts to respect
+the 12K character limit and skips unreadable candidates. The trace records
+`origin=automatic_recovery` and `recovery_reason`.
+
+If no useful planned range remains **and every candidate has been visited**,
+the agent stops with `status=plan_covered` instead of falsely claiming that
+the model stalled. This means only that the filename-heuristic plan was
+covered, **not** that the whole repository was traversed, every line was
+verified, or the model called `finish_analysis`. If relevant planned
+candidates remain unreadable/unvisited, the status stays `stalled` and
+partial evidence is preserved. The total tool-error cap remains 24.
+
+The filename planner now assigns Alembic/migration files a lower-priority
+`migration` role so a migration named `*_pipeline.py` no longer displaces
+runtime service or repository implementations. Migration content remains
+available to the explorer and may still be selected if budget remains.
 
 These are **progress and stop guarantees**, not guarantees of full repository
-coverage or correct semantic evidence. A real Qwen/Colab run is still needed
-to measure improvements in tool behavior and useful observations.
+coverage or correct semantic evidence. Real Colab runs on the previous HEAD
+showed Qwen3.5-9B (reasoning disabled) extracting observations but sometimes
+claiming optimistic locking where `with_for_update` implements pessimistic
+locking, or conflating a semaphore with brute-force rate limiting. Those
+errors are **not** resolved by this control-flow fix. Treat extracted claims
+as unverified until a separate semantic grounding/verifier phase exists.
 
 These guards **do not** assert that extracted claims are semantically correct.
 The extractor prompt now distinguishes tests/deployment from HTTP handling,
