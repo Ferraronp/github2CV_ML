@@ -305,6 +305,7 @@ class RepoAnalyzer:
         analyzed_ranges: dict[str, list[tuple[int, int]]] = {}
         successful_calls: set[tuple[str, str]] = set()
         attempted_recoveries: set[str] = set()
+        attempted_range_recoveries: set[tuple[str, int]] = set()
         consecutive_tool_errors = 0
         total_tool_errors = 0
         no_progress_steps = 0
@@ -385,11 +386,78 @@ class RepoAnalyzer:
                     if recovery_args is not None:
                         break
                 if recovery_args is None:
-                    status = "stalled"
-                    warnings.append(
-                        "Explorer stalled without new source progress; "
-                        "no readable unvisited planned file remains for recovery"
-                    )
+                    # After each candidate has been visited, the plan may still
+                    # contain large files with unseen source ranges. Deepen those
+                    # files before treating the selected plan as exhausted.
+                    for item in exploration_plan:
+                        path = item["path"]
+                        if path not in visited_files:
+                            continue
+                        matching = [x for x in summaries if x["path"] == path]
+                        if not matching:
+                            continue
+                        total_lines = matching[0]["total_lines"]
+                        first_unread = 1
+                        for start, end in sorted(analyzed_ranges.get(path, [])):
+                            if start > first_unread:
+                                break
+                            first_unread = max(first_unread, end + 1)
+                        if first_unread > total_lines:
+                            continue
+                        range_key = (path, first_unread)
+                        if range_key in attempted_range_recoveries:
+                            continue
+                        attempted_range_recoveries.add(range_key)
+                        end_line = min(
+                            total_lines, first_unread + browser.max_read_lines - 1
+                        )
+                        while end_line >= first_unread:
+                            try:
+                                browser.read_file(
+                                    path, start_line=first_unread, end_line=end_line
+                                )
+                                recovery_args = {
+                                    "path": path, "start_line": first_unread,
+                                    "end_line": end_line,
+                                }
+                                break
+                            except ValueError as exc:
+                                if (
+                                    "prompt character budget" in str(exc)
+                                    and end_line > first_unread
+                                ):
+                                    end_line = first_unread + (
+                                        end_line - first_unread
+                                    ) // 2
+                                    continue
+                                warnings.append(
+                                    f"Recovery skipped {path}:{first_unread}: "
+                                    f"{str(exc)[:100]}"
+                                )
+                                break
+                            except (RuntimeError, OSError) as exc:
+                                warnings.append(
+                                    f"Recovery skipped {path}:{first_unread}: "
+                                    f"{type(exc).__name__}"
+                                )
+                                break
+                        if recovery_args is not None:
+                            break
+                if recovery_args is None:
+                    if exploration_plan and all(
+                        item["path"] in visited_files for item in exploration_plan
+                    ):
+                        status = "plan_covered"
+                        warnings.append(
+                            "Selected-file plan covered; no further readable planned "
+                            "ranges remain. Whole-repository coverage is unknown"
+                        )
+                    else:
+                        status = "stalled"
+                        warnings.append(
+                            "Explorer stalled without new source progress; "
+                            "no readable unvisited planned file remains for recovery"
+                        )
                     break
                 force_recovery = False
                 consecutive_tool_errors = 0
@@ -517,6 +585,7 @@ class RepoAnalyzer:
                         "path": fragment["path"],
                         "line_start": fragment["start_line"],
                         "line_end": fragment["end_line"],
+                        "total_lines": fragment["total_lines"],
                         "summary": summary,
                         "accepted": len(claims),
                         "rejected": rejected,
