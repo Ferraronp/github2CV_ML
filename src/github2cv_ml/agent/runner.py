@@ -21,7 +21,9 @@ from github2cv_ml.domain.repository import RepositoryRef
 CATEGORIES = {"technology", "architecture", "testing", "deployment", "project_type"}
 EXPLORER_PROMPT = """You explore a GitHub repository using read-only tools.
 The goal is to locate real implementation evidence for project technologies and architecture.
-Call one tool per turn. Start with list_files or search_code; read relevant code ranges.
+Call one tool per turn. The controller supplies a prioritized exploration plan.
+Prefer reading an unvisited relevant module; use list_files or search_code only
+when a specific implementation question requires navigation.
 Never repeat an identical tool call: use previous_actions to see what has been tried.
 Start by reviewing exploration_plan: candidate roles are guesses based on filenames,
 not verified architecture. Prioritize inspecting different planned implementation
@@ -31,8 +33,9 @@ Search is incomplete: next_offset means more candidate files were not scanned.
 Try to read at least two distinct planned modules before finish_analysis when possible.
 For backend applications, prioritize service, repository/data access, security,
 and infrastructure implementations over router declarations or config.
-Repeated tool errors will trigger a bounded deterministic recovery; adapt your
-next calls to the newest file_summaries and previous_actions.
+The controller may recover from repeated or unproductive navigation by reading
+an unread planned file. Use the newest file_summaries and previous_actions;
+do not restart navigation each turn.
 Tell the difference between a filename hypothesis and a supported code fact.
 If search_code returns partial results, try reading another relevant source file,
 or a different search query. Prioritize implementation in src/ over evaluation scripts.
@@ -304,6 +307,8 @@ class RepoAnalyzer:
         attempted_recoveries: set[str] = set()
         consecutive_tool_errors = 0
         total_tool_errors = 0
+        no_progress_steps = 0
+        force_recovery = False
         status = "budget_exhausted"
 
         for step in range(self.max_steps):
@@ -320,7 +325,12 @@ class RepoAnalyzer:
             state = {
                 "project_info": {k: v for k, v in info.items() if k != "readme_excerpt"},
                 "readme_excerpt": info["readme_excerpt"][:700],
-                "previous_actions": trace[-12:],
+                "previous_actions": [
+                    {key: action[key] for key in (
+                        "step", "tool", "arguments", "status", "error", "origin"
+                    ) if key in action}
+                    for action in trace[-12:]
+                ],
                 "file_summaries": summaries[-10:],
                 "known_observations": [e.observation for e in list(evidence.values())[-18:]],
                 "exploration_plan": exploration_plan,
@@ -334,34 +344,58 @@ class RepoAnalyzer:
                 ],
                 "remaining_steps": self.max_steps - step,
                 "remaining_read_calls": self.max_read_calls - read_calls,
+                "steps_without_new_source": no_progress_steps,
             }
-            # Qwen may repeat a rejected tool call dozens of times. After
-            # three consecutive errors, make at most one deterministic,
-            # read-only recovery call to an unread planned source file. It
-            # passes through the same isolation, budgets and provenance checks
-            # as an LLM-selected read. If no useful recovery remains, stop.
-            recovery = False
-            if consecutive_tool_errors >= 3:
-                next_path = next((
-                    item["path"] for item in exploration_plan
-                    if item["path"] not in visited_files
-                    and item["path"] not in attempted_recoveries
-                ), None)
-                if next_path is None:
+            # A duplicate read must not require three more identical failures.
+            # Also recover when valid navigation repeatedly produces no new
+            # source evidence: different searches can otherwise loop forever.
+            recovery_reason = (
+                "duplicate_source" if force_recovery else
+                "tool_errors" if consecutive_tool_errors >= 3 else
+                "no_source_progress" if no_progress_steps >= 3 else None
+            )
+            recovery = recovery_reason is not None
+            if recovery:
+                recovery_args = None
+                for item in exploration_plan:
+                    path = item["path"]
+                    if path in visited_files or path in attempted_recoveries:
+                        continue
+                    attempted_recoveries.add(path)
+                    # The initial 120 lines can exceed the character budget.
+                    # Shrink the excerpt deterministically without burning
+                    # extra explorer/model steps or read-call quota.
+                    end_line = browser.max_read_lines
+                    while end_line >= 1:
+                        try:
+                            browser.read_file(path, start_line=1, end_line=end_line)
+                            recovery_args = {
+                                "path": path, "start_line": 1, "end_line": end_line,
+                            }
+                            break
+                        except ValueError as exc:
+                            if "prompt character budget" in str(exc) and end_line > 1:
+                                end_line = max(1, end_line // 2)
+                                continue
+                            warnings.append(f"Recovery skipped {path}: {str(exc)[:120]}")
+                            break
+                        except (RuntimeError, OSError) as exc:
+                            warnings.append(f"Recovery skipped {path}: {type(exc).__name__}")
+                            break
+                    if recovery_args is not None:
+                        break
+                if recovery_args is None:
                     status = "stalled"
                     warnings.append(
-                        "Explorer stalled after repeated tool errors; "
-                        "no unvisited planned file remains for recovery"
+                        "Explorer stalled without new source progress; "
+                        "no readable unvisited planned file remains for recovery"
                     )
                     break
-                attempted_recoveries.add(next_path)
-                recovery = True
+                force_recovery = False
                 consecutive_tool_errors = 0
                 reply = {"tool_calls": [{"function": {
                     "name": "read_file",
-                    "arguments": json.dumps({
-                        "path": next_path, "start_line": 1, "end_line": 120,
-                    }),
+                    "arguments": json.dumps(recovery_args),
                 }}]}
             else:
                 try:
@@ -496,16 +530,27 @@ class RepoAnalyzer:
                     raise ValueError(f"Unsupported tool: {name}")
                 successful_calls.add(call_key)
                 consecutive_tool_errors = 0
+                if name == "read_file":
+                    no_progress_steps = 0
+                else:
+                    no_progress_steps += 1
                 action = {
                     "step": step + 1, "tool": name, "arguments": args,
                     "status": "ok", "result": value,
                 }
                 if recovery:
                     action["origin"] = "automatic_recovery"
+                    action["recovery_reason"] = recovery_reason
                 trace.append(action)
             except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
                 total_tool_errors += 1
                 consecutive_tool_errors += 1
+                no_progress_steps += 1
+                if (
+                    "Repeated identical tool call" in str(exc)
+                    or "Source lines already inspected" in str(exc)
+                ):
+                    force_recovery = True
                 trace.append({
                     "step": step + 1, "tool": name,
                     "arguments": args if isinstance(args, dict) else {},
