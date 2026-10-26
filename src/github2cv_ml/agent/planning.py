@@ -26,6 +26,8 @@ def _role_for(path: str) -> str:
         return "pipeline"
     if any(token in name for token in ("retriev", "rerank", "search", "vector", "embed")):
         return "retrieval"
+    if any(token in name for token in ("generat", "writer", "inference", "llm")):
+        return "generation"
     if (
         name in {"service", "services", "usecase", "use_case"}
         or name.endswith(("_service", "_services"))
