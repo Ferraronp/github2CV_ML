@@ -19,7 +19,7 @@ def _role_for(path: str) -> str:
     parents = {part.lower() for part in p.parts[:-1]}
     # Migration filenames often contain "pipeline", "generation" or "service",
     # but schema changes are not proof of application implementations.
-    if parents & {"migrations", "alembic", "versions"}:
+    if parents & {"migrations", "alembic"}:
         return "migration"
     if (
         "tests" in parents or "test" in parents or "evaluation" in parents
@@ -109,10 +109,8 @@ def build_exploration_plan(paths: list[str], limit: int = 7) -> list[dict[str, s
             if len(selected) >= limit:
                 break
 
-    # Migrations, tests and core utilities are useful, but must not displace
-    # source implementations when a read budget is tight.
-    # Tests and core utilities are useful, but should not displace service
-    # implementations if the budget is small.
+    # Migration files, tests and core utilities are useful but should not
+    # displace substantive implementations when the budget is tight.
     while len(selected) < limit and any(buckets[role] for role in SECONDARY_ROLES):
         for role in SECONDARY_ROLES:
             take_one(role)
