@@ -546,7 +546,7 @@ class RepoAnalyzer:
                 total_tool_errors += 1
                 consecutive_tool_errors += 1
                 no_progress_steps += 1
-                if (
+                if name == "read_file" and (
                     "Repeated identical tool call" in str(exc)
                     or "Source lines already inspected" in str(exc)
                 ):
