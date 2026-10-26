@@ -78,6 +78,26 @@ def _json_object(content: str) -> dict[str, Any]:
     return value
 
 
+def _range_already_analyzed(
+    start_line: int, end_line: int, previous_ranges: list[tuple[int, int]]
+) -> bool:
+    """Check coverage by the UNION of previous inclusive line ranges.
+
+    Adjacent intervals count as continuous coverage; a gap of even one line
+    means there is new source to inspect. The caller uses EOF-clamped bounds.
+    """
+    next_unseen = start_line
+    for old_start, old_end in sorted(previous_ranges):
+        if old_end < next_unseen:
+            continue
+        if old_start > next_unseen:
+            return False
+        next_unseen = max(next_unseen, old_end + 1)
+        if next_unseen > end_line:
+            return True
+    return False
+
+
 class ChatModel(Protocol):
     def complete(
         self,
@@ -563,13 +583,11 @@ class RepoAnalyzer:
                         start_line=args.get("start_line", 1),
                         end_line=args.get("end_line", 120),
                     )
-                    # GitHub ranges may be clamped at EOF. Different argument
-                    # strings can therefore refer to identical source lines.
+                    # Use the union of already-extracted ranges, not just
+                    # one old interval. The browser has already clamped EOF.
                     source_ranges = analyzed_ranges.get(fragment["path"], [])
-                    if any(
-                        previous_start <= fragment["start_line"]
-                        and fragment["end_line"] <= previous_end
-                        for previous_start, previous_end in source_ranges
+                    if _range_already_analyzed(
+                        fragment["start_line"], fragment["end_line"], source_ranges
                     ):
                         raise ValueError(
                             "Source lines already inspected; read a new range "
