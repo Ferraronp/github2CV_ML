@@ -40,7 +40,9 @@ class GitHubRepositoryCollector:
     ) -> None:
         self.client = client or GitHubApiClient(token=token)
 
-    def collect(self, repository: str) -> RepoSnapshot:
+    def collect(
+        self, repository: str, *, commit_sha: str | None = None
+    ) -> RepoSnapshot:
         owner, name = parse_repository_reference(repository)
         metadata = self.client.get_repository(owner, name)
 
@@ -49,14 +51,24 @@ class GitHubRepositoryCollector:
             raise GitHubApiError("GitHub repository metadata has no default branch")
 
         languages = self.client.get_languages(owner, name)
-        readme = self.client.get_readme(owner, name)
-        tree_payload = self.client.get_tree(owner, name, default_branch)
+        readme = self.client.get_readme(owner, name) if commit_sha is None else None
+        tree_payload = self.client.get_tree(owner, name, commit_sha or default_branch)
         file_tree = _normalize_tree(tree_payload)
+        if commit_sha is not None:
+            readme_paths = [
+                entry.path
+                for entry in file_tree
+                if entry.kind == RepoTreeEntryKind.FILE
+                and entry.path.lower() in {"readme.md", "readme.rst", "readme"}
+            ]
+            if readme_paths:
+                readme = self.client.get_file(owner, name, readme_paths[0], commit_sha)
+
         file_contents = _collect_signal_file_contents(
             self.client,
             owner,
             name,
-            default_branch,
+            commit_sha or default_branch,
             file_tree,
         )
         signals = extract_repository_signals(file_tree, file_contents)

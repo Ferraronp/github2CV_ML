@@ -44,6 +44,21 @@ class GitHubApiClient:
             allow_empty_repository_conflict=True,
         )
 
+    def get_branch_head_sha(self, owner: str, name: str, branch: str) -> str:
+        """Resolve the default branch to a stable commit before collecting source."""
+        encoded_branch = quote(branch, safe="")
+        payload = self._request_json(
+            f"{self._repo_path(owner, name)}/branches/{encoded_branch}"
+        )
+        sha = (payload.get("commit") or {}).get("sha")
+        if (
+            not isinstance(sha, str)
+            or len(sha) != 40
+            or any(character not in "0123456789abcdef" for character in sha)
+        ):
+            raise GitHubApiError("GitHub returned an invalid branch commit SHA")
+        return sha
+
     def get_file(self, owner: str, name: str, path: str, ref: str) -> str | None:
         """Fetch one repository text file, returning None if it disappeared or is absent."""
 
