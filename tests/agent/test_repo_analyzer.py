@@ -169,3 +169,30 @@ def test_collector_can_pin_tree_and_manifest_reads():
     snap = GitHubRepositoryCollector(client=client).collect("example/repo", commit_sha=SHA)
     assert snap.signals.dependencies[0].name == "pytest"
     assert client.refs == [("tree", SHA), ("file", SHA)]
+
+def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
+    from io import BytesIO
+
+    import github2cv_ml.agent.runner as runner
+
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data))
+        message = {"tool_calls": [{
+            "id": "call_1", "type": "function",
+            "function": {"name": "list_files", "arguments": "{}"},
+        }]}
+        return BytesIO(json.dumps({"choices": [{"message": message}]}).encode())
+
+    monkeypatch.setattr(runner, "urlopen", fake_urlopen)
+    model = LocalOpenAIModel(base_url="http://127.0.0.1:8080/v1", model="qwen-coder")
+    prompt = [{"role": "user", "content": "inspect"}]
+    response = model.complete(prompt, tools=[{"type": "function", "function": {
+        "name": "list_files", "parameters": {"type": "object", "properties": {}},
+    }}])
+    assert response["tool_calls"][0]["function"]["name"] == "list_files"
+    assert requests[0]["parallel_tool_calls"] is False
+    assert requests[0]["tool_choice"] == "auto"
+    assert requests[0]["model"] == "qwen-coder"
+    assert requests[0]["messages"] == prompt
