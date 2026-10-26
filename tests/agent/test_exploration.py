@@ -312,3 +312,49 @@ def test_readable_file_failed_github_fetch_still_spends_search_attempt():
     assert browser._search_attempted == {"src/a.py"}
     assert result["search_budget_exhausted"] is True
     assert result["next_offset"] is None
+
+
+def test_read_budget_exhaustion_stops_without_repeated_tool_errors():
+    paths = ["src/pipeline.py", "src/retrieval.py", "src/generation.py", "src/config.py"]
+    browser = RepositoryBrowser(FakeClient(), snapshot(paths), SHA)
+    model = SequenceModel([
+        ("list_files", {"path": "src"}),
+        ("read_file", {"path": "src/pipeline.py", "start_line": 1, "end_line": 2}),
+        ("read_file", {"path": "src/retrieval.py", "start_line": 1, "end_line": 2}),
+        ("read_file", {"path": "src/generation.py", "start_line": 1, "end_line": 2}),
+        ("read_file", {"path": "src/config.py", "start_line": 1, "end_line": 2}),
+        # Deliberately no finish_analysis: budget must end the loop directly.
+    ])
+    result = RepoAnalyzer(
+        model, browser, max_steps=10, max_read_calls=4
+    ).run()
+    assert result.status == "read_budget_exhausted"
+    assert result.coverage["planned_coverage_ratio"] == 1.0
+    assert result.coverage["planned_files_read"] == 4
+    assert len(result.file_summaries) == 4
+    assert len(model.explorer_states) == 5
+    assert len(result.tool_trace) == 5
+    assert all(action["status"] == "ok" for action in result.tool_trace)
+    assert any("Source read-call budget exhausted (4/4)" in w for w in result.warnings)
+
+
+def test_last_step_exhausted_read_is_not_misreported_as_step_budget():
+    browser = RepositoryBrowser(FakeClient(), snapshot(["src/retrieval.py"]), SHA)
+    model = SequenceModel([
+        ("read_file", {"path": "src/retrieval.py", "start_line": 1, "end_line": 2}),
+    ])
+    result = RepoAnalyzer(
+        model, browser, max_steps=1, max_read_calls=1
+    ).run()
+    assert result.status == "read_budget_exhausted"
+    assert len(result.file_summaries) == 1
+    assert len(result.tool_trace) == 1
+
+
+def test_explicit_finish_still_reports_completed_when_reads_remain():
+    browser = RepositoryBrowser(FakeClient(), snapshot(["src/retrieval.py"]), SHA)
+    model = SequenceModel([("finish_analysis", {})])
+    result = RepoAnalyzer(
+        model, browser, max_steps=5, max_read_calls=1
+    ).run()
+    assert result.status == "completed"

@@ -75,7 +75,12 @@ These are bounds, not promises of exhaustive scanning.
 **heuristically selected plan** was inspected, **not** project-wide
 coverage or semantic evidence quality. `status=completed` means the
 Explorer called `finish_analysis`; it does not imply the selected plan
-was fully covered.
+was fully covered. When the allowed number of `read_file` calls is used,
+the Explorer stops without further LLM tool calls and returns
+`status=read_budget_exhausted`, preserving extracted evidence and explicitly
+recording the read-budget limit. This avoids repeated rejected read calls.
+If the final available step consumes the last read, the status still names
+the read-budget limit rather than the generic step budget.
 
 ## Local model setup
 

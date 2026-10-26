@@ -65,3 +65,14 @@ def test_colab_server_uses_dynamic_port_consistently():
     assert '"--base-url", SERVER_BASE_URL' in command
     assert '"--port", "8080"' not in server
     assert 'base_url="http://127.0.0.1:8080/v1"' not in probe
+
+
+def test_colab_classifies_read_budget_stop_as_real_exploration():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert 'analysis["status"] == "read_budget_exhausted"' in source
+    assert "not an explicit finish_analysis" in source

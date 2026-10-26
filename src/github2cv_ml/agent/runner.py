@@ -294,6 +294,11 @@ class RepoAnalyzer:
         status = "budget_exhausted"
 
         for step in range(self.max_steps):
+            if read_calls >= self.max_read_calls:
+                # There is no reason to ask the model to read another file
+                # after the read budget is spent. Preserve the partial result.
+                status = "read_budget_exhausted"
+                break
             # Fresh explorer context each step: source code stays in the extraction call.
             state = {
                 "project_info": {k: v for k, v in info.items() if k != "readme_excerpt"},
@@ -433,6 +438,15 @@ class RepoAnalyzer:
             except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
                 trace.append({"step": step + 1, "tool": name, "arguments": args if "args" in locals() else {},
                               "status": "error", "error": str(exc)[:200]})
+        # The final allowed Explorer step may consume the last read call:
+        # classify that case by the actual exhausted resource, not step count.
+        if status == "budget_exhausted" and read_calls >= self.max_read_calls:
+            status = "read_budget_exhausted"
+        if status == "read_budget_exhausted":
+            warnings.append(
+                f"Source read-call budget exhausted ({read_calls}/{self.max_read_calls}); "
+                "no further Explorer tool calls were made"
+            )
         selected_paths = [item["path"] for item in exploration_plan]
         covered = [path for path in selected_paths if path in visited_files]
         not_covered = [path for path in selected_paths if path not in visited_files]
