@@ -6,11 +6,7 @@ import pytest
 
 from github2cv_ml.agent.runner import LocalOpenAIModel, RepoAnalyzer
 from github2cv_ml.agent.source_tools import RepositoryBrowser, allowed_source_path
-from github2cv_ml.domain.repository import (
-    RepoSnapshot,
-    RepoTreeEntry,
-    RepoTreeEntryKind,
-)
+from github2cv_ml.domain.repository import RepoSnapshot
 
 SHA = "a" * 40
 CODE = "\n".join(
