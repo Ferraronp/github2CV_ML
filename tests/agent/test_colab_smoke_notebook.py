@@ -29,7 +29,7 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert "feat/repo-analyzer-toolcalling-mvp" in source
+    assert "feat/deep-repo-exploration" in source
     assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
     assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
     assert "PREBUILT_SHA256" in source
@@ -41,6 +41,8 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
     assert 'analysis["tool_trace"]' in source
     assert 'analysis["evidence"]' in source
     assert '"report.md"' in source
+    assert 'analysis.get("coverage", {})' in source
+    assert 'analysis.get("exploration_plan", [])' in source
 
 
 def test_colab_server_uses_dynamic_port_consistently():

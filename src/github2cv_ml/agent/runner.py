@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import Field, ValidationError
 
+from github2cv_ml.agent.planning import build_exploration_plan
 from github2cv_ml.agent.source_tools import EXPLORER_TOOLS, RepositoryBrowser
 from github2cv_ml.domain.base import ContractModel
 from github2cv_ml.domain.evidence import EvidenceKind, EvidenceSource, RepoEvidence
@@ -22,6 +23,13 @@ EXPLORER_PROMPT = """You explore a GitHub repository using read-only tools.
 The goal is to locate real implementation evidence for project technologies and architecture.
 Call one tool per turn. Start with list_files or search_code; read relevant code ranges.
 Never repeat an identical tool call: use previous_actions to see what has been tried.
+Start by reviewing exploration_plan: candidate roles are guesses based on filenames,
+not verified architecture. Prioritize inspecting different planned implementation
+files rather than spending the entire budget on repeated searches.
+Use list_files(offset=...) or search_code(path=..., offset=...) to see more results.
+Search is incomplete: next_offset means more candidate files were not scanned.
+Try to read at least two distinct planned modules before finish_analysis when possible.
+Tell the difference between a filename hypothesis and a supported code fact.
 If search_code returns partial results, try reading another relevant source file,
 or a different search query. Prioritize implementation in src/ over evaluation scripts.
 After sufficient investigation, call finish_analysis. No shell, no edits, no assumptions.
@@ -149,6 +157,8 @@ class RepoAnalysis(ContractModel):
     evidence: list[RepoEvidence] = Field(default_factory=list)
     file_summaries: list[dict[str, Any]] = Field(default_factory=list)
     tool_trace: list[dict[str, Any]] = Field(default_factory=list)
+    exploration_plan: list[dict[str, str]] = Field(default_factory=list)
+    coverage: dict[str, Any] = Field(default_factory=dict)
     status: str
     verification_level: str = "locator_only"
     warnings: list[str] = Field(default_factory=list)
@@ -276,6 +286,8 @@ class RepoAnalyzer:
         trace: list[dict[str, Any]] = []
         warnings: list[str] = []
         read_calls = 0
+        exploration_plan = build_exploration_plan(browser.source_paths())
+        visited_files: set[str] = set()
         successful_calls: set[tuple[str, str]] = set()
         status = "budget_exhausted"
 
@@ -287,6 +299,15 @@ class RepoAnalyzer:
                 "previous_actions": trace[-12:],
                 "file_summaries": summaries[-10:],
                 "known_observations": [e.observation for e in list(evidence.values())[-18:]],
+                "exploration_plan": exploration_plan,
+                "visited_planned_files": sorted(
+                    path for path in visited_files
+                    if path in {item["path"] for item in exploration_plan}
+                ),
+                "unvisited_planned_files": [
+                    item["path"] for item in exploration_plan
+                    if item["path"] not in visited_files
+                ],
                 "remaining_steps": self.max_steps - step,
                 "remaining_read_calls": self.max_read_calls - read_calls,
             }
@@ -367,9 +388,17 @@ class RepoAnalyzer:
                 if name == "get_project_info":
                     value = info
                 elif name == "list_files":
-                    value = browser.list_files(path=args.get("path", ""))
+                    value = browser.list_files(
+                        path=args.get("path", ""),
+                        offset=args.get("offset", 0),
+                        limit=args.get("limit", 40),
+                    )
                 elif name == "search_code":
-                    value = browser.search_code(query=args.get("query", ""))
+                    value = browser.search_code(
+                        query=args.get("query", ""),
+                        path=args.get("path", ""),
+                        offset=args.get("offset", 0),
+                    )
                 elif name == "read_file":
                     if read_calls >= self.max_read_calls:
                         raise ValueError("Read-call budget exhausted")
@@ -380,6 +409,7 @@ class RepoAnalyzer:
                     )
                     read_calls += 1
                     summary, claims, rejected = self._extract_file(fragment)
+                    visited_files.add(fragment["path"])
                     summaries.append({
                         "path": fragment["path"],
                         "line_start": fragment["start_line"],
@@ -401,6 +431,25 @@ class RepoAnalyzer:
             except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
                 trace.append({"step": step + 1, "tool": name, "arguments": args if "args" in locals() else {},
                               "status": "error", "error": str(exc)[:200]})
+        selected_paths = [item["path"] for item in exploration_plan]
+        covered = [path for path in selected_paths if path in visited_files]
+        not_covered = [path for path in selected_paths if path not in visited_files]
+        coverage = {
+            "scope": "heuristically_selected_files_only",
+            "eligible_source_files": len(browser.source_paths()),
+            "planned_files": len(selected_paths),
+            "planned_files_read": len(covered),
+            "visited_files": sorted(visited_files),
+            "unvisited_planned_files": not_covered,
+            "planned_coverage_ratio": (
+                round(len(covered) / len(selected_paths), 3) if selected_paths else None
+            ),
+        }
+        if not_covered:
+            warnings.append(
+                f"Only {len(covered)}/{len(selected_paths)} planned source files inspected; "
+                "project-wide coverage is unknown"
+            )
         summary, project_type = self._final_summary(list(evidence.values()))
         if not evidence:
             warnings.append("No implementation evidence extracted")
@@ -417,6 +466,8 @@ class RepoAnalyzer:
             evidence=list(evidence.values()),
             file_summaries=summaries,
             tool_trace=trace,
+            exploration_plan=exploration_plan,
+            coverage=coverage,
             status=status,
             warnings=warnings,
             generated_at=datetime.now(timezone.utc),

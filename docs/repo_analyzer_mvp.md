@@ -12,9 +12,9 @@ GTX 1660 Super still needs to be measured.
 
 ## Colab: реальная проверка Qwen2.5-Coder 7B Q4
 
-[**Открыть smoke notebook в Google Colab**](https://colab.research.google.com/github/Ferraronp/github2CV_ML/blob/feat/repo-analyzer-toolcalling-mvp/notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb)
+[**Открыть smoke notebook в Google Colab**](https://colab.research.google.com/github/Ferraronp/github2CV_ML/blob/feat/deep-repo-exploration/notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb)
 
-[Исходный ноутбук в PR #27](../notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb).
+[Исходный ноутбук в PR #28](../notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb).
 
 В Colab переключи runtime на GPU (T4), затем выполни ячейки сверху вниз. Сервер автоматически выбирает свободный loopback-порт, так что занятый `8080` не требует перезапуска среды; этот же адрес используется для probe и CLI.
 Ноутбук клонирует ветку PR, устанавливает пакет, загружает ту же
@@ -33,6 +33,40 @@ Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF, что использовалась в v8
 формат ноутбука, но не качество function calling Qwen или совместимость
 выделенной Colab GPU/драйвера с CUDA 12.8. Не отправляй приватный код
 в небезопасную среду; фильтр файлов не исключает секреты внутри .py/.js.
+
+## Deep-exploration increment (issue #17)
+
+The Explorer now receives a **deterministic candidate exploration plan** generated
+from the safe repository file tree. The plan favors a small, role-diverse set of
+files (pipeline, retrieval, generation, entrypoint, storage, core, evaluation).
+These roles are **hypotheses based on path names**, not proof of implemented
+capabilities. The model still chooses its read-only tool calls; it is prompted
+to visit different important files rather than rely on repeated keyword matches.
+
+The read-only tools now support pagination:
+- `list_files(path="", offset=0, limit=40)` returns `files`, `total`,
+  `offset`, `next_offset` (null on final page), and `truncated`.
+- `search_code(query, path="", offset=0)` searches literal text in at most
+  12 candidate files per page (case-insensitive; no regex). The offset
+  advances by *candidate files*, not by matches, and may omit additional
+  matches within a scanned file after the 12-match cap. The result includes
+  `next_offset`, `total_candidate_files`, and `search_budget_exhausted`.
+  Follow `next_offset` for more files; it is not a whole-repo search.
+- `read_file` remains limited to 120 lines and 12K characters.
+
+To avoid using the entire GitHub fetch budget on searches alone,
+`RepositoryBrowser` defaults to 40 distinct file fetch attempts total,
+of which searches can initiate at most 24. Files already cached can be
+reused, and remaining fetches are available for explicit `read_file` calls.
+These are bounds, not promises of exhaustive scanning.
+
+`analysis.json` now includes `exploration_plan` and `coverage`, and
+`report.md` lists visited/unvisited selected files. The ratio
+`planned_files_read / planned_files` measures only how much of the
+**heuristically selected plan** was inspected, **not** project-wide
+coverage or semantic evidence quality. `status=completed` means the
+Explorer called `finish_analysis`; it does not imply the selected plan
+was fully covered.
 
 ## Local model setup
 
@@ -101,7 +135,7 @@ are not executed. This is **not a guarantee that source code itself contains
 no embedded secrets**. Treat private repositories and remote model endpoints
 as sensitive; do not assume the filter is sufficient for untrusted private data.
 Per run: default 12 Explorer steps, 6 read calls, 120 lines/read,
-80 KB/file, 12K characters/read, 25 distinct fetched files, 12 files/scanned search and 12 search matches.
+80 KB/file, 12K characters/read, 40 total distinct fetches (24 initiated by search), 12 files/scanned search page and 12 search matches.
 Search is **partial**, not a guarantee of finding every occurrence.
 Implementation paths under `src/` and other conventional source directories
 are scanned before similarly named evaluation utilities. Repeated **successful**
