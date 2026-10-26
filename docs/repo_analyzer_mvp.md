@@ -39,6 +39,12 @@ Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF, что использовалась в v8
 The Explorer now receives a **deterministic candidate exploration plan** generated
 from the safe repository file tree. The plan favors a small, role-diverse set of
 files (pipeline, retrieval, generation, entrypoint, storage, core, evaluation).
+The planner excludes paths with missing, empty, or over-limit size metadata
+because these cannot pass the browser's initial read checks; the actual content
+may still fail validation after fetching. The number of candidates is capped by
+`min(7, max_read_calls)` (six by default), avoiding a plan whose size already
+exceeds the allowed read count. Covering the plan is still not guaranteed because
+other tool calls use the step budget and the model may revisit files.
 These roles are **hypotheses based on path names**, not proof of implemented
 capabilities. The model still chooses its read-only tool calls; it is prompted
 to visit different important files rather than rely on repeated keyword matches.
@@ -56,8 +62,11 @@ The read-only tools now support pagination:
 
 To avoid using the entire GitHub fetch budget on searches alone,
 `RepositoryBrowser` defaults to 40 distinct file fetch attempts total,
-of which searches can initiate at most 24. Files already cached can be
-reused, and remaining fetches are available for explicit `read_file` calls.
+of which searches can initiate at most 24. Metadata-rejected large,
+empty or unknown-size files do not consume search fetch quota, though they still
+advance the pagination offset. Only actual GitHub fetch attempts count toward
+the search quota. Files already cached can be reused, and remaining fetches
+are available for explicit `read_file` calls.
 These are bounds, not promises of exhaustive scanning.
 
 `analysis.json` now includes `exploration_plan` and `coverage`, and

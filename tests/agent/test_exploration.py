@@ -185,3 +185,130 @@ def test_empty_source_tree_yields_no_fake_coverage_percentage():
     assert result.coverage["planned_files"] == 0
     assert result.coverage["planned_coverage_ratio"] is None
     assert not result.coverage["unvisited_planned_files"]
+
+
+def snapshot_with_sizes(sizes):
+    return RepoSnapshot.model_validate({
+        "repository": {
+            "owner": "example", "name": "repo",
+            "url": "https://github.com/example/repo", "default_branch": "main",
+        },
+        "captured_at": "2026-10-26T00:00:00Z",
+        "file_tree": [
+            {"path": path, "kind": "file", "size": size}
+            for path, size in sizes.items()
+        ],
+    })
+
+
+def test_planner_skips_unreadable_candidates_and_selects_replacement():
+    # pipeline.py would win by path score but cannot be fetched (150 KB).
+    snap = snapshot_with_sizes({
+        "src/pipeline.py": 150_000,
+        "src/workflow.py": 63,
+        "src/retrieval.py": 64,
+        "src/generation.py": None,
+        "src/empty.py": 0,
+    })
+    client = FakeClient()
+    browser = RepositoryBrowser(client, snap, SHA, max_file_bytes=80_000)
+    assert set(browser.source_paths()) == {"src/workflow.py", "src/retrieval.py"}
+    plan = build_exploration_plan(browser.source_paths(), limit=6)
+    assert [item["path"] for item in plan] == [
+        "src/workflow.py", "src/retrieval.py",
+    ]
+    model = SequenceModel([
+        ("read_file", {"path": "src/workflow.py", "start_line": 1, "end_line": 2}),
+        ("read_file", {"path": "src/retrieval.py", "start_line": 1, "end_line": 2}),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(model, browser).run()
+    assert result.coverage["planned_files"] == 2
+    assert result.coverage["planned_files_read"] == 2
+    assert result.coverage["planned_coverage_ratio"] == 1.0
+    assert all("pipeline.py" not in path for path, _ in client.refs)
+
+
+def test_oversized_files_do_not_spend_search_quota_or_hide_later_pages():
+    snap = snapshot_with_sizes({
+        "src/a.py": 100_000,
+        "src/b.py": 100_000,
+        "src/c.py": 64,
+    })
+    client = FakeClient()
+    browser = RepositoryBrowser(
+        client, snap, SHA,
+        max_file_bytes=80_000,
+        max_search_files=2,
+        max_search_unique_files=2,
+        max_unique_files=3,
+    )
+    first = browser.search_code("dense", offset=0)
+    assert first["considered_files"] == 2
+    assert first["scanned_files"] == 0
+    assert first["next_offset"] == 2
+    assert not first["search_budget_exhausted"]
+    assert browser._search_attempted == set()
+    assert client.refs == []
+
+    second = browser.search_code("dense", offset=first["next_offset"])
+    assert second["matches"] == [{"path": "src/c.py", "line": 1}]
+    assert second["scanned_files"] == 1
+    assert second["next_offset"] is None
+    assert not second["search_budget_exhausted"]
+    assert browser._search_attempted == {"src/c.py"}
+    assert client.refs == [("src/c.py", SHA)]
+
+
+def test_unknown_size_and_empty_file_advance_offset_without_search_fetch():
+    snap = snapshot_with_sizes({
+        "src/a.py": None, "src/b.py": 0, "src/c.py": 64,
+    })
+    client = FakeClient()
+    browser = RepositoryBrowser(
+        client, snap, SHA, max_search_files=2, max_search_unique_files=1,
+    )
+    first = browser.search_code("dense")
+    second = browser.search_code("dense", offset=first["next_offset"])
+    assert first["scanned_files"] == 0
+    assert second["matches"][0]["path"] == "src/c.py"
+    assert browser._search_attempted == {"src/c.py"}
+
+
+def test_default_exploration_plan_does_not_exceed_read_budget():
+    paths = [
+        "src/pipeline.py", "src/retrieval.py", "src/generation.py",
+        "src/main.py", "src/database.py", "src/algorithm.py",
+        "evaluation/evaluate.py",
+    ]
+    browser = RepositoryBrowser(FakeClient(), snapshot(paths), SHA)
+    normal = RepoAnalyzer(SequenceModel([("finish_analysis", {})]), browser)
+    result = normal.run()
+    assert normal.max_read_calls == 6
+    assert len(result.exploration_plan) == normal.max_read_calls
+    assert result.coverage["planned_files"] == 6
+    assert len({x["candidate_role"] for x in result.exploration_plan}) == 6
+
+    budgeted = RepoAnalyzer(
+        SequenceModel([("finish_analysis", {})]), browser, max_read_calls=2
+    ).run()
+    assert len(budgeted.exploration_plan) == 2
+    assert budgeted.coverage["planned_files"] == 2
+
+
+def test_readable_file_failed_github_fetch_still_spends_search_attempt():
+    class MissingClient(FakeClient):
+        def get_file(self, owner, name, path, ref):
+            self.refs.append((path, ref))
+            return None
+
+    client = MissingClient()
+    browser = RepositoryBrowser(
+        client, snapshot(["src/a.py", "src/b.py"]), SHA,
+        max_search_files=2, max_search_unique_files=1,
+    )
+    result = browser.search_code("dense")
+    assert client.refs == [("src/a.py", SHA)]
+    assert browser._search_attempted == {"src/a.py"}
+    assert result["search_budget_exhausted"] is True
+    assert result["next_offset"] is None

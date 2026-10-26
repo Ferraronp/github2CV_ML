@@ -86,7 +86,7 @@ class RepositoryBrowser:
             if e.kind == RepoTreeEntryKind.FILE and allowed_source_path(e.path)
         }
 
-    def _load(self, path: str) -> list[str]:
+    def _load(self, path: str, *, search_fetch: bool = False) -> list[str]:
         if not isinstance(path, str):
             raise ValueError("File path must be a string")
         if path not in self._files:
@@ -99,6 +99,9 @@ class RepositoryBrowser:
         if len(self._attempted) >= self.max_unique_files:
             raise ValueError("GitHub file fetch budget exhausted")
         self._attempted.add(path)
+        # Charge a search slot only when _load actually reaches the GitHub API.
+        if search_fetch:
+            self._search_attempted.add(path)
         repo = self.snapshot.repository
         content = self.client.get_file(repo.owner, repo.name, path, self.commit_sha)
         if content is None:
@@ -167,6 +170,11 @@ class RepositoryBrowser:
         scanned = 0
         search_budget_exhausted = False
         for candidate in candidates[offset:offset + self.max_search_files]:
+            # Metadata-rejected files do not attempt a fetch or consume quota.
+            size = self._files[candidate]
+            if size is None or size <= 0 or size > self.max_file_bytes:
+                considered += 1
+                continue
             # Reserve some GitHub fetches for exploratory read_file calls.
             if (
                 candidate not in self._cache
@@ -176,10 +184,8 @@ class RepositoryBrowser:
                 search_budget_exhausted = True
                 break
             considered += 1
-            if candidate not in self._cache:
-                self._search_attempted.add(candidate)
             try:
-                lines = self._load(candidate)
+                lines = self._load(candidate, search_fetch=True)
             except ValueError:
                 continue
             scanned += 1
@@ -239,8 +245,15 @@ class RepositoryBrowser:
 
 
     def source_paths(self) -> list[str]:
-        """Safe paths for deterministic exploration planning (no content reads)."""
-        return list(self._files)
+        """Files the browser can read according to size and path metadata.
+
+        Actual contents can still be unavailable, binary or larger than the
+        GitHub tree's reported size; this is a preflight, not a guarantee.
+        """
+        return [
+            path for path, size in self._files.items()
+            if size is not None and 0 < size <= self.max_file_bytes
+        ]
 
 
 EXPLORER_TOOLS = [

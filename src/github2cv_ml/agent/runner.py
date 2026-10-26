@@ -286,7 +286,9 @@ class RepoAnalyzer:
         trace: list[dict[str, Any]] = []
         warnings: list[str] = []
         read_calls = 0
-        exploration_plan = build_exploration_plan(browser.source_paths())
+        exploration_plan = build_exploration_plan(
+            browser.source_paths(), limit=min(7, self.max_read_calls)
+        )
         visited_files: set[str] = set()
         successful_calls: set[tuple[str, str]] = set()
         status = "budget_exhausted"
