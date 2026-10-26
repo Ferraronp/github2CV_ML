@@ -9,7 +9,7 @@ PRIMARY_ROLES = (
     "pipeline", "retrieval", "generation", "service", "data_access",
     "security", "infrastructure", "entrypoint",
 )
-SECONDARY_ROLES = ("core", "evaluation")
+SECONDARY_ROLES = ("core", "evaluation", "migration")
 ROLE_ORDER = PRIMARY_ROLES + SECONDARY_ROLES
 
 
@@ -17,6 +17,10 @@ def _role_for(path: str) -> str:
     p = PurePosixPath(path)
     name = p.stem.lower()
     parents = {part.lower() for part in p.parts[:-1]}
+    # Migration filenames often contain "pipeline", "generation" or "service",
+    # but schema changes are not proof of application implementations.
+    if parents & {"migrations", "alembic", "versions"}:
+        return "migration"
     if (
         "tests" in parents or "test" in parents or "evaluation" in parents
         or name.startswith("test_") or "benchmark" in name or name.startswith("eval_")
@@ -105,6 +109,8 @@ def build_exploration_plan(paths: list[str], limit: int = 7) -> list[dict[str, s
             if len(selected) >= limit:
                 break
 
+    # Migrations, tests and core utilities are useful, but must not displace
+    # source implementations when a read budget is tight.
     # Tests and core utilities are useful, but should not displace service
     # implementations if the budget is small.
     while len(selected) < limit and any(buckets[role] for role in SECONDARY_ROLES):
