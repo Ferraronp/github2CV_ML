@@ -53,6 +53,7 @@ class RepositoryBrowser:
     max_unique_files: int = 25
     max_file_bytes: int = 80_000
     max_read_lines: int = 120
+    max_excerpt_chars: int = 12_000
     max_search_files: int = 12
     _cache: dict[str, list[str]] = field(default_factory=dict, init=False)
     _attempted: set[str] = field(default_factory=set, init=False)
@@ -133,12 +134,14 @@ class RepositoryBrowser:
         if start_line > len(lines):
             raise ValueError("Start line exceeds file length")
         end = min(end_line, len(lines))
+        numbered = "\n".join(
+            f"{n}: {lines[n - 1]}" for n in range(start_line, end + 1)
+        )
+        if len(numbered) > self.max_excerpt_chars:
+            raise ValueError("Requested source range exceeds prompt character budget")
         return {
             "path": path, "start_line": start_line, "end_line": end,
-            "total_lines": len(lines),
-            "numbered_text": "\n".join(
-                f"{n}: {lines[n - 1]}" for n in range(start_line, end + 1)
-            ),
+            "total_lines": len(lines), "numbered_text": numbered,
         }
 
     def project_info(self) -> dict[str, Any]:

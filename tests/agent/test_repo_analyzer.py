@@ -124,6 +124,14 @@ def test_browser_enforces_safe_paths_ranges_and_fetch_budget():
     assert github.refs == [("src/search.py", SHA)]
 
 
+def test_read_file_rejects_oversized_prompt_fragment():
+    browser = RepositoryBrowser(
+        FakeGitHub(), make_snapshot(), SHA, max_excerpt_chars=12
+    )
+    with pytest.raises(ValueError, match="character budget"):
+        browser.read_file("src/search.py", 1, 4)
+
+
 def test_model_rejects_remote_endpoint_by_default():
     with pytest.raises(ValueError, match="Remote model"):
         LocalOpenAIModel(base_url="https://llm.example.com/v1")

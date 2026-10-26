@@ -72,7 +72,7 @@ The tools do not expose shell commands or file writes. Only text files in the fr
 file tree can be opened; environment/secrets, binary artifacts, large files, generated
 directories and traversal paths are excluded. Source files are not executed.
 Per run: default 12 Explorer steps, 6 read calls, 120 lines/read,
-80 KB/file, 25 distinct fetched files, 12 files/scanned search and 12 search matches.
+80 KB/file, 12K characters/read, 25 distinct fetched files, 12 files/scanned search and 12 search matches.
 Search is **partial**, not a guarantee of finding every occurrence.
 
 Repository source and README are treated as untrusted data, never as agent instructions.
