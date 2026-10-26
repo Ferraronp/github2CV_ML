@@ -41,3 +41,25 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
     assert 'analysis["tool_trace"]' in source
     assert 'analysis["evidence"]' in source
     assert '"report.md"' in source
+
+
+def test_colab_server_uses_dynamic_port_consistently():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    codes = [
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    ]
+    server = next(code for code in codes if "SERVER_LOG_PATH = WORKDIR" in code)
+    probe = next(code for code in codes if "diagnostic_tool = [{" in code)
+    command = next(code for code in codes if '"-m", "github2cv_ml.agent"' in code)
+
+    # Port 8080 may already be occupied by an unrelated Colab process.
+    assert 'port_probe.bind(("127.0.0.1", 0))' in server
+    assert '"--port", str(SERVER_PORT)' in server
+    assert 'SERVER_BASE_URL = f"http://127.0.0.1:{SERVER_PORT}/v1"' in server
+    assert 'urlopen(SERVER_HEALTH_URL, timeout=3)' in server
+    assert 'base_url=SERVER_BASE_URL' in probe
+    assert '"--base-url", SERVER_BASE_URL' in command
+    assert '"--port", "8080"' not in server
+    assert 'base_url="http://127.0.0.1:8080/v1"' not in probe

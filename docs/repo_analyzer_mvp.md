@@ -16,7 +16,7 @@ GTX 1660 Super still needs to be measured.
 
 [Исходный ноутбук в PR #27](../notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb).
 
-В Colab переключи runtime на GPU (T4), затем выполни ячейки сверху вниз.
+В Colab переключи runtime на GPU (T4), затем выполни ячейки сверху вниз. Сервер автоматически выбирает свободный loopback-порт, так что занятый `8080` не требует перезапуска среды; этот же адрес используется для probe и CLI.
 Ноутбук клонирует ветку PR, устанавливает пакет, загружает ту же
 Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF, что использовалась в v8 benchmark,
 разворачивает проверенный по SHA-256 CUDA prebuilt llama-server, выполняет
