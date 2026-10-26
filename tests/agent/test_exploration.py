@@ -412,7 +412,7 @@ def test_duplicate_read_immediately_recovers_to_next_planned_module():
     assert len(result.evidence) == 2
 
 
-def test_no_unvisited_planned_file_stops_after_one_duplicate():
+def test_fully_covered_plan_stops_with_distinct_status_after_duplicate():
     repeated = {"path": "src/retrieval.py", "start_line": 1, "end_line": 2}
     model = SequenceModel([
         ("read_file", repeated),
@@ -422,11 +422,12 @@ def test_no_unvisited_planned_file_stops_after_one_duplicate():
         model, RepositoryBrowser(FakeClient(), snapshot(["src/retrieval.py"]), SHA),
         max_steps=100, max_read_calls=10,
     ).run()
-    assert result.status == "stalled"
+    assert result.status == "plan_covered"
     assert len(model.explorer_states) == 2
     assert len(result.tool_trace) == 2
     assert len(result.evidence) == 1
-    assert "no readable unvisited planned file" in " ".join(result.warnings)
+    assert result.coverage["planned_coverage_ratio"] == 1.0
+    assert "Whole-repository coverage is unknown" in " ".join(result.warnings)
 
 
 def test_different_requested_ranges_do_not_reextract_same_source_lines():
@@ -442,7 +443,7 @@ def test_different_requested_ranges_do_not_reextract_same_source_lines():
         model, RepositoryBrowser(client, snapshot(["src/retrieval.py"]), SHA),
         max_steps=20, max_read_calls=3,
     ).run()
-    assert result.status == "stalled"
+    assert result.status == "plan_covered"
     assert len(model.explorer_states) == 2
     assert len(result.file_summaries) == 1
     assert len(result.evidence) == 1
@@ -524,3 +525,62 @@ def test_unreadable_recovery_candidate_does_not_block_next_planned_file():
     assert result.status == "completed"
     assert [entry["path"] for entry in result.file_summaries] == ["src/retrieval.py"]
     assert "Recovery skipped src/pipeline.py" in " ".join(result.warnings)
+
+
+def test_migrations_are_not_treated_as_runtime_pipeline():
+    paths = [
+        "migrations/versions/d92f_github_report_pipeline.py",
+        "src/auth/service.py", "src/projects/repo.py",
+        "src/common/db/session.py", "src/main.py",
+    ]
+    chosen = build_exploration_plan(paths, limit=4)
+    assert len(chosen) == 4
+    assert all(not item["path"].startswith("migrations/") for item in chosen)
+    assert {item["candidate_role"] for item in chosen} == {
+        "service", "data_access", "infrastructure", "entrypoint",
+    }
+    expanded = build_exploration_plan(paths, limit=5)
+    migration = expanded[-1]
+    assert migration["candidate_role"] == "migration"
+
+
+def test_deep_recovery_reads_unvisited_later_lines_in_planned_module():
+    path = "src/projects/service.py"
+    content = "dense_search(query)\n" * 250
+    initial = {"path": path, "start_line": 1, "end_line": 120}
+    model = SequenceModel([
+        ("read_file", initial),
+        ("read_file", initial),
+        ("finish_analysis", {}),
+    ])
+    browser = RepositoryBrowser(
+        FakeClient({path: content}), snapshot([path]), SHA
+    )
+    result = RepoAnalyzer(
+        model, browser, max_steps=10, max_read_calls=3
+    ).run()
+    assert result.status == "completed"
+    assert len(result.file_summaries) == 2
+    assert result.file_summaries[0]["total_lines"] == 250
+    assert result.file_summaries[0]["line_start"] == 1
+    assert result.file_summaries[0]["line_end"] == 120
+    assert result.file_summaries[1]["line_start"] == 121
+    assert result.file_summaries[1]["line_end"] == 240
+    assert result.tool_trace[2]["origin"] == "automatic_recovery"
+    assert len(model.explorer_states) == 3
+    assert len(browser._attempted) == 1
+
+
+def test_unvisited_planned_file_still_reports_stalled_when_unreadable():
+    paths = ["src/pipeline.py", "src/retrieval.py"]
+    model = SequenceModel([
+        ("read_file", {"path": "src/pipeline.py", "start_line": 1, "end_line": 2}),
+        ("read_file", {"path": "src/pipeline.py", "start_line": 1, "end_line": 2}),
+    ])
+    browser = RepositoryBrowser(
+        FakeClient({"src/retrieval.py": "broken\x00binary"}), snapshot(paths), SHA
+    )
+    result = RepoAnalyzer(model, browser, max_steps=10, max_read_calls=4).run()
+    assert result.status == "stalled"
+    assert result.coverage["planned_coverage_ratio"] == 0.5
+    assert result.coverage["unvisited_planned_files"] == ["src/retrieval.py"]
