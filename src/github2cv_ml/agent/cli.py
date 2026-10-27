@@ -67,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=Path("results"))
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--max-reads", type=int, default=6)
+    parser.add_argument(
+        "--prefer-whole-files", action="store_true",
+        help="Experimental: give the extractor a whole file if it fits the excerpt budget",
+    )
     parser.add_argument("--allow-remote-model", action="store_true",
                         help="Explicitly allow sending source code outside the local machine")
     options = parser.parse_args(argv)
@@ -92,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         browser=browser,
         max_steps=options.max_steps,
         max_read_calls=options.max_reads,
+        prefer_whole_files=options.prefer_whole_files,
     ).run()
     options.output.mkdir(parents=True, exist_ok=True)
     (options.output / "analysis.json").write_text(
