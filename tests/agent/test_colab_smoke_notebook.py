@@ -29,11 +29,14 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert "feat/deep-repo-exploration" in source
-    assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
-    assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
+    assert "experiment/adaptive-whole-file-extraction" in source
+    assert "unsloth/Qwen3.5-9B-GGUF" in source
+    assert "Qwen3.5-9B-Q4_K_M.gguf" in source
     assert "PREBUILT_SHA256" in source
     assert '"--jinja"' in source
+    assert '"--reasoning", "off"' in source
+    assert 'cmd.append("--prefer-whole-files")' in source
+    assert "PREFER_WHOLE_FILES = True" in source
     assert '"--host", "127.0.0.1"' in source
     assert "LocalOpenAIModel" in source
     assert '"-m", "github2cv_ml.agent"' in source
