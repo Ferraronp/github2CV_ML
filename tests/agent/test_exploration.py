@@ -795,7 +795,6 @@ def test_experiment_switch_changes_extracted_range_not_retrieval_budget(
     assert fragment_summary["line_start"] == 1
     assert fragment_summary["total_lines"] == 250
     assert fragment_summary["line_end"] == (250 if prefer_whole else 120)
-    assert fragment_summary["whole_file"] is False or prefer_whole
     assert fragment_summary["whole_file"] is prefer_whole
     assert result.coverage["source_read_strategy"] == (
         "adaptive_whole_file" if prefer_whole else "bounded_ranges"
@@ -806,7 +805,7 @@ def test_experiment_switch_changes_extracted_range_not_retrieval_budget(
 
 def test_experiment_falls_back_without_changing_read_call_budget():
     path = "src/projects/service.py"
-    content = ("dense_search(query) # " + "x" * 75 + "\n") * 250
+    content = ("dense_search(query) # " + "x" * 65 + "\n") * 250
     model = SequenceModel([
         ("read_file", {"path": path}),
         ("finish_analysis", {}),
