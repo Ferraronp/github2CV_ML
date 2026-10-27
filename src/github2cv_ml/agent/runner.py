@@ -207,6 +207,7 @@ class RepoAnalyzer:
         *,
         max_steps: int = 12,
         max_read_calls: int = 6,
+        prefer_whole_files: bool = False,
     ) -> None:
         if max_steps < 1 or max_read_calls < 1:
             raise ValueError("Budgets must be positive")
@@ -214,6 +215,7 @@ class RepoAnalyzer:
         self.browser = browser
         self.max_steps = max_steps
         self.max_read_calls = max_read_calls
+        self.prefer_whole_files = prefer_whole_files
 
     def _extract_file(self, fragment: dict[str, Any]) -> tuple[str, list[RepoEvidence], int]:
         repo = self.browser.snapshot.repository
@@ -366,6 +368,9 @@ class RepoAnalyzer:
                 "remaining_steps": self.max_steps - step,
                 "remaining_read_calls": self.max_read_calls - read_calls,
                 "steps_without_new_source": no_progress_steps,
+                "source_read_strategy": (
+                    "adaptive_whole_file" if self.prefer_whole_files else "bounded_ranges"
+                ),
             }
             # A duplicate read must not require three more identical failures.
             # Also recover when valid navigation repeatedly produces no new
@@ -578,10 +583,11 @@ class RepoAnalyzer:
                 elif name == "read_file":
                     if read_calls >= self.max_read_calls:
                         raise ValueError("Read-call budget exhausted")
-                    fragment = browser.read_file(
+                    fragment = browser.read_for_extraction(
                         path=args["path"],
                         start_line=args.get("start_line", 1),
                         end_line=args.get("end_line", 120),
+                        prefer_whole_file=self.prefer_whole_files,
                     )
                     # Use the union of already-extracted ranges, not just
                     # one old interval. The browser has already clamped EOF.
@@ -604,6 +610,10 @@ class RepoAnalyzer:
                         "line_start": fragment["start_line"],
                         "line_end": fragment["end_line"],
                         "total_lines": fragment["total_lines"],
+                        "whole_file": (
+                            fragment["start_line"] == 1
+                            and fragment["end_line"] == fragment["total_lines"]
+                        ),
                         "summary": summary,
                         "accepted": len(claims),
                         "rejected": rejected,
@@ -657,6 +667,9 @@ class RepoAnalyzer:
         not_covered = [path for path in selected_paths if path not in visited_files]
         coverage = {
             "scope": "heuristically_selected_files_only",
+            "source_read_strategy": (
+                "adaptive_whole_file" if self.prefer_whole_files else "bounded_ranges"
+            ),
             "eligible_source_files": len(browser.source_paths()),
             "planned_files": len(selected_paths),
             "planned_files_read": len(covered),
