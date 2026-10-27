@@ -719,3 +719,105 @@ def test_union_dedup_does_not_reject_an_actual_one_line_gap():
     assert model.extract_calls == 3
     assert len(result.file_summaries) == 3
     assert all(item["status"] == "ok" for item in result.tool_trace)
+
+
+def test_whole_file_experiment_reads_250_lines_in_one_extraction():
+    path = "src/projects/service.py"
+    content = "async def something(): pass\n" * 250
+    client = FakeClient({path: content})
+    browser = RepositoryBrowser(client, snapshot([path]), SHA)
+
+    fragment = browser.read_for_extraction(
+        path, start_line=1, end_line=120, prefer_whole_file=True
+    )
+    assert fragment["start_line"] == 1
+    assert fragment["end_line"] == fragment["total_lines"] == 250
+    assert fragment["numbered_text"].startswith("1: async def")
+    assert "250: async def" in fragment["numbered_text"]
+    assert len(fragment["numbered_text"]) <= browser.max_excerpt_chars
+    assert client.refs == [(path, SHA)]
+
+
+def test_whole_file_experiment_falls_back_when_source_is_too_long():
+    path = "src/projects/service.py"
+    content = ("long_method_with_parameters_" + "x" * 50 + "\n") * 250
+    browser = RepositoryBrowser(FakeClient({path: content}), snapshot([path]), SHA)
+
+    fragment = browser.read_for_extraction(
+        path, prefer_whole_file=True
+    )
+    assert fragment["total_lines"] == 250
+    assert fragment["end_line"] == 120
+    assert len(fragment["numbered_text"]) <= browser.max_excerpt_chars
+    assert "121:" not in fragment["numbered_text"]
+
+
+def test_whole_file_experiment_preserves_explicit_ranges_and_bounds():
+    path = "src/projects/service.py"
+    browser = RepositoryBrowser(
+        FakeClient({path: "some_code()\n" * 250}), snapshot([path]), SHA
+    )
+    fragment = browser.read_for_extraction(
+        path, start_line=61, end_line=120, prefer_whole_file=True
+    )
+    assert (fragment["start_line"], fragment["end_line"]) == (61, 120)
+    small = browser.read_for_extraction(
+        path, start_line=1, end_line=20, prefer_whole_file=True
+    )
+    assert (small["start_line"], small["end_line"]) == (1, 20)
+    with pytest.raises(ValueError, match="Invalid range"):
+        browser.read_for_extraction(
+            path, start_line=1, end_line=250, prefer_whole_file=True
+        )
+
+
+@pytest.mark.parametrize("prefer_whole", [False, True])
+def test_experiment_switch_changes_extracted_range_not_retrieval_budget(
+    prefer_whole,
+):
+    path = "src/projects/service.py"
+    content = "dense_search(query)\n" * 250
+    client = FakeClient({path: content})
+    model = SequenceModel([
+        ("read_file", {"path": path, "start_line": 1, "end_line": 120}),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(
+        model,
+        RepositoryBrowser(client, snapshot([path]), SHA),
+        prefer_whole_files=prefer_whole,
+        max_steps=3,
+        max_read_calls=2,
+    ).run()
+    assert result.status == "completed"
+    assert len(result.file_summaries) == 1
+    fragment_summary = result.file_summaries[0]
+    assert fragment_summary["line_start"] == 1
+    assert fragment_summary["total_lines"] == 250
+    assert fragment_summary["line_end"] == (250 if prefer_whole else 120)
+    assert fragment_summary["whole_file"] is False or prefer_whole
+    assert fragment_summary["whole_file"] is prefer_whole
+    assert result.coverage["source_read_strategy"] == (
+        "adaptive_whole_file" if prefer_whole else "bounded_ranges"
+    )
+    assert len(result.evidence) == 1
+    assert client.refs == [(path, SHA)]
+
+
+def test_experiment_falls_back_without_changing_read_call_budget():
+    path = "src/projects/service.py"
+    content = ("dense_search(query) # " + "x" * 75 + "\n") * 250
+    model = SequenceModel([
+        ("read_file", {"path": path}),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(
+        model,
+        RepositoryBrowser(FakeClient({path: content}), snapshot([path]), SHA),
+        prefer_whole_files=True, max_steps=3, max_read_calls=2,
+    ).run()
+    assert result.status == "completed"
+    assert result.file_summaries[0]["total_lines"] == 250
+    assert result.file_summaries[0]["line_end"] == 120
+    assert result.file_summaries[0]["whole_file"] is False
+    assert len(result.evidence) == 1
