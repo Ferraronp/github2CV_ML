@@ -229,6 +229,40 @@ class RepositoryBrowser:
             "total_lines": len(lines), "numbered_text": numbered,
         }
 
+    def read_for_extraction(
+        self,
+        path: str,
+        start_line: int = 1,
+        end_line: int = 120,
+        *,
+        prefer_whole_file: bool = False,
+    ) -> dict[str, Any]:
+        """Experiment: expand an initial read to the whole file when safe.
+
+        The public read_file tool remains bounded to max_read_lines. Only an
+        initial 1..max_read_lines request may expand; explicit smaller/later
+        ranges retain their meaning. Both modes share the same frozen source
+        cache, line numbering and max_excerpt_chars safety budget.
+        """
+        fragment = self.read_file(path, start_line=start_line, end_line=end_line)
+        if (
+            not prefer_whole_file
+            or start_line != 1
+            or end_line != self.max_read_lines
+            or fragment["end_line"] == fragment["total_lines"]
+        ):
+            return fragment
+
+        lines = self._load(path)
+        numbered = "\n".join(f"{n}: {line}" for n, line in enumerate(lines, 1))
+        if len(numbered) > self.max_excerpt_chars:
+            return fragment
+        return {
+            **fragment,
+            "end_line": len(lines),
+            "numbered_text": numbered,
+        }
+
     def project_info(self) -> dict[str, Any]:
         signals = self.snapshot.signals
         return {
