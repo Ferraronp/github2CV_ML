@@ -268,3 +268,38 @@ If Qwen2.5-Coder 7B struggles with tool calling, keep the
 **isolated source extraction** step and replace Explorer with deterministic
 file selection. LangGraph can wrap the current steps later, but is not
 needed for the first end-to-end experiment.
+
+
+## Experimental whole-file extraction (branch only)
+
+Branch: `experiment/adaptive-whole-file-extraction`. This is an **opt-in A/B
+experiment**, not a replacement for the bounded tools or a semantic verifier.
+
+Run the same repo, pinned model, model settings, and budgets twice:
+
+```bash
+python -m github2cv_ml.agent OWNER/REPO --max-steps 16 --max-reads 7 \
+  --prefer-whole-files --output ./results-whole
+python -m github2cv_ml.agent OWNER/REPO --max-steps 16 --max-reads 7 \
+  --output ./results-ranges
+```
+
+With `--prefer-whole-files`, a normal initial `read_file(1, 120)`
+request can be expanded to all numbered lines in the pinned file **only if**
+the complete numbered text fits `max_excerpt_chars=12000`. Otherwise
+the original 120-line fragment is used. Explicit smaller or later ranges
+are unchanged, as are the frozen file tree, 80 KB file guard, read-call quota,
+deduplication, provenance line numbers, and `list_files`/`search_code`
+pagination. The old mode remains the CLI default.
+
+Compare `coverage.source_read_strategy`, `file_summaries[*].whole_file`,
+source ranges, trace/error counts, number of observations, and **manual
+correctness of claims**. A higher observation count or wider source range
+alone is not evidence of better semantic accuracy. Larger files may still
+need multiple reads. Character-budget fitting is not a guarantee of fitting
+every model's token context.
+
+The Colab smoke notebook on this branch defaults to Qwen3.5-9B with
+`--reasoning off`. Flip `PREFER_WHOLE_FILES` in its setup cell and
+rerun the analysis to compare both strategies; outputs use separate ZIP
+names and directories. No PR is opened for this experiment.
