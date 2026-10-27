@@ -29,7 +29,7 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert "feat/repo-analyzer-toolcalling-mvp" in source
+    assert "feat/deep-repo-exploration" in source
     assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
     assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
     assert "PREBUILT_SHA256" in source
@@ -41,6 +41,8 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
     assert 'analysis["tool_trace"]' in source
     assert 'analysis["evidence"]' in source
     assert '"report.md"' in source
+    assert 'analysis.get("coverage", {})' in source
+    assert 'analysis.get("exploration_plan", [])' in source
 
 
 def test_colab_server_uses_dynamic_port_consistently():
@@ -63,3 +65,34 @@ def test_colab_server_uses_dynamic_port_consistently():
     assert '"--base-url", SERVER_BASE_URL' in command
     assert '"--port", "8080"' not in server
     assert 'base_url="http://127.0.0.1:8080/v1"' not in probe
+
+
+def test_colab_classifies_read_budget_stop_as_real_exploration():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert 'analysis["status"] == "read_budget_exhausted"' in source
+    assert "not an explicit finish_analysis" in source
+
+
+def test_colab_reports_stalled_runs_and_automatic_recovery():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\\n".join(
+        "".join(cell["source"]) for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert 'analysis["status"] == "stalled"' in source
+    assert 'action.get("origin") == "automatic_recovery"' in source
+
+
+def test_colab_distinguishes_covered_plan_from_model_completion():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\n".join(
+        "".join(cell["source"]) for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert 'analysis["status"] == "plan_covered"' in source
+    assert "not whole-repository or semantic coverage" in source

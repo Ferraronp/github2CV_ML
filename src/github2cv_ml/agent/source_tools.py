@@ -66,13 +66,15 @@ class RepositoryBrowser:
     client: Any
     snapshot: RepoSnapshot
     commit_sha: str
-    max_unique_files: int = 25
+    max_unique_files: int = 40
+    max_search_unique_files: int = 24
     max_file_bytes: int = 80_000
     max_read_lines: int = 120
     max_excerpt_chars: int = 12_000
     max_search_files: int = 12
     _cache: dict[str, list[str]] = field(default_factory=dict, init=False)
     _attempted: set[str] = field(default_factory=set, init=False)
+    _search_attempted: set[str] = field(default_factory=set, init=False)
     _files: dict[str, int | None] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
@@ -84,7 +86,7 @@ class RepositoryBrowser:
             if e.kind == RepoTreeEntryKind.FILE and allowed_source_path(e.path)
         }
 
-    def _load(self, path: str) -> list[str]:
+    def _load(self, path: str, *, search_fetch: bool = False) -> list[str]:
         if not isinstance(path, str):
             raise ValueError("File path must be a string")
         if path not in self._files:
@@ -97,6 +99,9 @@ class RepositoryBrowser:
         if len(self._attempted) >= self.max_unique_files:
             raise ValueError("GitHub file fetch budget exhausted")
         self._attempted.add(path)
+        # Charge a search slot only when _load actually reaches the GitHub API.
+        if search_fetch:
+            self._search_attempted.add(path)
         repo = self.snapshot.repository
         content = self.client.get_file(repo.owner, repo.name, path, self.commit_sha)
         if content is None:
@@ -106,17 +111,29 @@ class RepositoryBrowser:
         self._cache[path] = content.splitlines()
         return self._cache[path]
 
-    def list_files(self, path: str = "") -> dict[str, Any]:
+    def list_files(
+        self, path: str = "", offset: int = 0, limit: int = 40
+    ) -> dict[str, Any]:
+        """Paginated safe file listing; offset is an index in the filtered file list."""
         if not isinstance(path, str):
             raise ValueError("Directory path must be a string")
         path = path.strip("/")
         if path and not _allowed_path_parts(path):
             raise ValueError("Invalid directory")
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        if type(limit) is not int or not 1 <= limit <= 80:
+            raise ValueError("limit must be an integer between 1 and 80")
         paths = sorted(
             (p for p in self._files if not path or p.startswith(path + "/")),
             key=self._priority,
         )
-        return {"files": paths[:80], "truncated": len(paths) > 80, "total": len(paths)}
+        page = paths[offset:offset + limit]
+        next_offset = offset + len(page) if offset + len(page) < len(paths) else None
+        return {
+            "files": page, "total": len(paths), "offset": offset,
+            "next_offset": next_offset, "truncated": next_offset is not None,
+        }
 
     @staticmethod
     def _priority(path: str) -> tuple[int, int, int, str]:
@@ -127,27 +144,71 @@ class RepositoryBrowser:
         )
         return (0 if implementation else 1, _PRIORITY.get(suffix, 8), path.count("/"), path)
 
-    def search_code(self, query: str) -> dict[str, Any]:
-        """Literal, case-insensitive search; no regex execution or shell access."""
+    def search_code(
+        self, query: str, path: str = "", offset: int = 0
+    ) -> dict[str, Any]:
+        """Paged literal search within an optional safe directory prefix.
+
+        Offset advances over candidate *files*, not result lines. Search remains
+        incomplete if the model does not follow next_offset, or fetch budget runs out.
+        """
         if not isinstance(query, str) or not 2 <= len(query) <= 64 or "\n" in query:
             raise ValueError("Search query must be 2-64 characters on one line")
+        if not isinstance(path, str):
+            raise ValueError("Directory path must be a string")
+        path = path.strip("/")
+        if path and not _allowed_path_parts(path):
+            raise ValueError("Invalid directory")
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        candidates = sorted(
+            (p for p in self._files if not path or p.startswith(path + "/")),
+            key=self._priority,
+        )
         matches: list[dict[str, Any]] = []
+        considered = 0
         scanned = 0
-        for path in sorted(self._files, key=self._priority):
-            if scanned >= self.max_search_files or len(matches) >= 12:
+        search_budget_exhausted = False
+        for candidate in candidates[offset:offset + self.max_search_files]:
+            # Metadata-rejected files do not attempt a fetch or consume quota.
+            size = self._files[candidate]
+            if size is None or size <= 0 or size > self.max_file_bytes:
+                considered += 1
+                continue
+            # Reserve some GitHub fetches for exploratory read_file calls.
+            if (
+                candidate not in self._cache
+                and candidate not in self._search_attempted
+                and len(self._search_attempted) >= self.max_search_unique_files
+            ):
+                search_budget_exhausted = True
                 break
+            considered += 1
             try:
-                lines = self._load(path)
+                lines = self._load(candidate, search_fetch=True)
             except ValueError:
                 continue
             scanned += 1
-            for n, line in enumerate(lines, 1):
+            for line_number, line in enumerate(lines, 1):
                 if query.casefold() in line.casefold():
-                    matches.append({"path": path, "line": n})
+                    matches.append({"path": candidate, "line": line_number})
                     if len(matches) >= 12:
                         break
-        return {"query": query, "matches": matches, "scanned_files": scanned,
-                "scan_limit": self.max_search_files, "partial_search": True}
+            if len(matches) >= 12:
+                break
+        next_offset = (
+            offset + considered
+            if not search_budget_exhausted and offset + considered < len(candidates)
+            else None
+        )
+        return {
+            "query": query, "path": path, "offset": offset,
+            "matches": matches, "scanned_files": scanned,
+            "considered_files": considered, "total_candidate_files": len(candidates),
+            "next_offset": next_offset, "scan_limit": self.max_search_files,
+            "partial_search": True,
+            "search_budget_exhausted": search_budget_exhausted,
+        }
 
     def read_file(self, path: str, start_line: int = 1, end_line: int = 120) -> dict[str, Any]:
         if type(start_line) is not int or type(end_line) is not int:
@@ -183,20 +244,36 @@ class RepositoryBrowser:
         }
 
 
+    def source_paths(self) -> list[str]:
+        """Files the browser can read according to size and path metadata.
+
+        Actual contents can still be unavailable, binary or larger than the
+        GitHub tree's reported size; this is a preflight, not a guarantee.
+        """
+        return [
+            path for path, size in self._files.items()
+            if size is not None and 0 < size <= self.max_file_bytes
+        ]
+
+
 EXPLORER_TOOLS = [
     {
         "type": "function", "function": {
-            "name": "list_files", "description": "List safe repository source files or files in a directory.",
+            "name": "list_files", "description": "Page through safe source files. Follow next_offset for more; path is an optional directory prefix.",
             "parameters": {"type": "object", "properties": {
-                "path": {"type": "string", "description": "Directory prefix, or empty for all"}
+                "path": {"type": "string", "description": "Directory prefix, or empty for all"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 80}
             }},
         }
     },
     {
         "type": "function", "function": {
-            "name": "search_code", "description": "Literal search in a bounded subset of source files. Not regex; results are incomplete.",
+            "name": "search_code", "description": "Paged literal search, optionally inside a source directory. Follow next_offset to scan another batch. Not regex and never exhaustive by default.",
             "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "Case-insensitive literal token or identifier"}
+                "query": {"type": "string", "description": "Case-insensitive literal token or identifier"},
+                "path": {"type": "string", "description": "Optional directory prefix"},
+                "offset": {"type": "integer", "minimum": 0}
             }, "required": ["query"]},
         }
     },

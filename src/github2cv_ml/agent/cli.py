@@ -40,6 +40,20 @@ def render_report(result) -> str:
             f"  - {source.path}:{source.line_start}-{source.line_end} "
             f"([view source]({source.url}))",
         ])
+    coverage = result.coverage
+    lines.extend([
+        "",
+        "## Exploration coverage",
+        "",
+        f"Selected candidate files inspected: "
+        f"{coverage.get('planned_files_read', 0)}/{coverage.get('planned_files', 0)}",
+        f"Eligible source files in tree: {coverage.get('eligible_source_files', 0)}",
+        "Note: selected-file coverage is not a measurement of full repository coverage.",
+    ])
+    if coverage.get("unvisited_planned_files"):
+        lines.extend(["", "Planned files not inspected:"])
+        for path in coverage["unvisited_planned_files"]:
+            lines.append(f"- `{path}`")
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {warning}" for warning in result.warnings)
     return "\n".join(lines) + "\n"

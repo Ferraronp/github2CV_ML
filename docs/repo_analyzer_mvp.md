@@ -12,9 +12,9 @@ GTX 1660 Super still needs to be measured.
 
 ## Colab: реальная проверка Qwen2.5-Coder 7B Q4
 
-[**Открыть smoke notebook в Google Colab**](https://colab.research.google.com/github/Ferraronp/github2CV_ML/blob/feat/repo-analyzer-toolcalling-mvp/notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb)
+[**Открыть smoke notebook в Google Colab**](https://colab.research.google.com/github/Ferraronp/github2CV_ML/blob/feat/deep-repo-exploration/notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb)
 
-[Исходный ноутбук в PR #27](../notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb).
+[Исходный ноутбук в PR #28](../notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb).
 
 В Colab переключи runtime на GPU (T4), затем выполни ячейки сверху вниз. Сервер автоматически выбирает свободный loopback-порт, так что занятый `8080` не требует перезапуска среды; этот же адрес используется для probe и CLI.
 Ноутбук клонирует ветку PR, устанавливает пакет, загружает ту же
@@ -33,6 +33,110 @@ Qwen2.5-Coder-7B-Instruct Q4_K_M GGUF, что использовалась в v8
 формат ноутбука, но не качество function calling Qwen или совместимость
 выделенной Colab GPU/драйвера с CUDA 12.8. Не отправляй приватный код
 в небезопасную среду; фильтр файлов не исключает секреты внутри .py/.js.
+
+## Deep-exploration increment (issue #17)
+
+The Explorer now receives a **deterministic candidate exploration plan** generated
+from the safe repository file tree. The plan favors a small, role-diverse set of
+files from implementation-relevant roles: pipeline, retrieval, generation,
+service, data access, security, infrastructure and entrypoints. Supporting
+core utilities and tests are lower priority. On the backend regression
+fixture, this favors authentication services and user repositories over
+router definitions and generic settings.
+The planner excludes paths with missing, empty, or over-limit size metadata
+because these cannot pass the browser's initial read checks; the actual content
+may still fail validation after fetching. The number of candidates is capped by
+`min(7, max_read_calls)` (six by default), avoiding a plan whose size already
+exceeds the allowed read count. Covering the plan is still not guaranteed because
+other tool calls use the step budget and the model may revisit files.
+These roles are **hypotheses based on path names**, not proof of implemented
+capabilities. The model still chooses its read-only tool calls; it is prompted
+to visit different important files rather than rely on repeated keyword matches.
+
+The read-only tools now support pagination:
+- `list_files(path="", offset=0, limit=40)` returns `files`, `total`,
+  `offset`, `next_offset` (null on final page), and `truncated`.
+- `search_code(query, path="", offset=0)` searches literal text in at most
+  12 candidate files per page (case-insensitive; no regex). The offset
+  advances by *candidate files*, not by matches, and may omit additional
+  matches within a scanned file after the 12-match cap. The result includes
+  `next_offset`, `total_candidate_files`, and `search_budget_exhausted`.
+  Follow `next_offset` for more files; it is not a whole-repo search.
+- `read_file` remains limited to 120 lines and 12K characters.
+
+To avoid using the entire GitHub fetch budget on searches alone,
+`RepositoryBrowser` defaults to 40 distinct file fetch attempts total,
+of which searches can initiate at most 24. Metadata-rejected large,
+empty or unknown-size files do not consume search fetch quota, though they still
+advance the pagination offset. Only actual GitHub fetch attempts count toward
+the search quota. Files already cached can be reused, and remaining fetches
+are available for explicit `read_file` calls.
+These are bounds, not promises of exhaustive scanning.
+
+`analysis.json` now includes `exploration_plan` and `coverage`, and
+`report.md` lists visited/unvisited selected files. The ratio
+`planned_files_read / planned_files` measures only how much of the
+**heuristically selected plan** was inspected, **not** project-wide
+coverage or semantic evidence quality. `status=completed` means the
+Explorer called `finish_analysis`; it does not imply the selected plan
+was fully covered. When the allowed number of `read_file` calls is used,
+the Explorer stops without further LLM tool calls and returns
+`status=read_budget_exhausted`, preserving extracted evidence and explicitly
+recording the read-budget limit. This avoids repeated rejected read calls.
+If the final available step consumes the last read, the status still names
+the read-budget limit rather than the generic step budget.
+
+### Bounded loop recovery and evidence quality
+
+A real smoke on a separate FastAPI/PostgreSQL/Redis backend found **90
+duplicate tool errors in 100 Explorer steps**, despite 7/7 heuristic targets
+having been visited. A successful result from an identical call remains
+cached and is not executed twice; a different requested range that resolves
+to already analyzed source lines is now also rejected **without another
+extractor call**.
+
+The orchestration layer now triggers deterministic recovery after **one
+duplicate/already-inspected read**, three consecutive tool errors, or three
+steps without a new successful source read (including otherwise successful
+navigation). A single duplicate search/list call remains recoverable by the
+model; it does not immediately trigger fallback. The explorer instructions
+prioritize unread planned files rather than restarting navigation every turn.
+
+Recovery reads the next unread planned candidate using the same pinned,
+read-only browser, isolated extractor and evidence validation as an ordinary
+read. After visiting the selected candidates, it can deepen an already-read
+planned module by reading its first *uninspected* source range, if budgets
+allow. In either case the controller shrinks oversized excerpts to respect
+the 12K character limit and skips unreadable candidates. The trace records
+`origin=automatic_recovery` and `recovery_reason`.
+
+If no useful planned range remains **and every candidate has been visited**,
+the agent stops with `status=plan_covered` instead of falsely claiming that
+the model stalled. This means only that the filename-heuristic plan was
+covered, **not** that the whole repository was traversed, every line was
+verified, or the model called `finish_analysis`. If relevant planned
+candidates remain unreadable/unvisited, the status stays `stalled` and
+partial evidence is preserved. The total tool-error cap remains 24.
+
+The filename planner now assigns Alembic/migration files a lower-priority
+`migration` role so a migration named `*_pipeline.py` no longer displaces
+runtime service or repository implementations. Migration content remains
+available to the explorer and may still be selected if budget remains.
+
+These are **progress and stop guarantees**, not guarantees of full repository
+coverage or correct semantic evidence. Real Colab runs on the previous HEAD
+showed Qwen3.5-9B (reasoning disabled) extracting observations but sometimes
+claiming optimistic locking where `with_for_update` implements pessimistic
+locking, or conflating a semaphore with brute-force rate limiting. Those
+errors are **not** resolved by this control-flow fix. Treat extracted claims
+as unverified until a separate semantic grounding/verifier phase exists.
+
+These guards **do not** assert that extracted claims are semantically correct.
+The extractor prompt now distinguishes tests/deployment from HTTP handling,
+observability and application cleanup, and discourages assuming that middleware
+is registered simply because it was defined. Those are prompt constraints,
+not a substitute for a cross-file verifier.
+
 
 ## Local model setup
 
@@ -101,7 +205,7 @@ are not executed. This is **not a guarantee that source code itself contains
 no embedded secrets**. Treat private repositories and remote model endpoints
 as sensitive; do not assume the filter is sufficient for untrusted private data.
 Per run: default 12 Explorer steps, 6 read calls, 120 lines/read,
-80 KB/file, 12K characters/read, 25 distinct fetched files, 12 files/scanned search and 12 search matches.
+80 KB/file, 12K characters/read, 40 total distinct fetches (24 initiated by search), 12 files/scanned search page and 12 search matches.
 Search is **partial**, not a guarantee of finding every occurrence.
 Implementation paths under `src/` and other conventional source directories
 are scanned before similarly named evaluation utilities. Repeated **successful**
