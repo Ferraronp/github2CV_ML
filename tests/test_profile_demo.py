@@ -57,6 +57,8 @@ class FakeLiveModel:
         assert json_mode
         payload = json.loads(messages[-1]["content"])
         self.calls.append(payload)
+        if payload.get("task") == "skill_reconciliation":
+            return {"content": json.dumps({"merges": []})}
         identifier = payload["observations"][0]["id"]
         project = payload["repository"]
         skill = "Nix Flakes" if project.endswith("/build") else "FastAPI"
@@ -91,15 +93,20 @@ def test_demo_reads_json_and_zip_and_exposes_real_model_proposals(tmp_path):
     assert [c.text for c in result.claims if c.kind == "skill"] == [
         "FastAPI", "Nix Flakes",
     ]
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 3  # two repository calls and one reconciliation
     assert len([c for c in result.claims if c.kind == "project"]) == 2
 
     stored = json.loads((output / "candidate_profile.json").read_text("utf-8"))
     assert stored["candidate"]["github_login"] == "example"
     assert len(stored["claims"]) == 4
     trace = json.loads((output / "llm_profile_trace.json").read_text("utf-8"))
-    assert len(trace) == 2
-    assert [call["repository"] for call in trace] == ["example/api", "example/build"]
+    assert len(trace) == 3
+    assert [call["repository"] for call in trace if "repository" in call] == [
+        "example/api", "example/build",
+    ]
+    assert trace[-1]["stage"] == "skill_reconciliation"
+    assert trace[-1]["input_skills"] == ["FastAPI", "Nix Flakes"]
+    assert trace[-1]["llm_proposed_merges"] == []
     assert trace[0]["evidence_count"] == 1
     assert trace[1]["llm_proposed_skills"] == ["Nix Flakes"]
     assert trace[0]["duration_seconds"] >= 0
