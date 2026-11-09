@@ -1,4 +1,4 @@
-"""Static checks for real-model Repo Analyzer and Candidate Profile Colab demo."""
+"""Static checks for the three-stage live Qwen3.5 Colab demo."""
 
 import ast
 import json
@@ -30,7 +30,7 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert "feat/candidate-profile-builder" in source
+    assert "feat/cv-writer" in source
     assert "unsloth/Qwen3.5-9B-GGUF" in source
     assert "Qwen3.5-9B-Q4_K_M.gguf" in source
     assert 'RELEASE_TAG = "b11896"' in source
@@ -163,3 +163,24 @@ def test_colab_python_cells_parse_without_syntax_errors():
         if cell["cell_type"] == "code":
             code = "".join(cell["source"])
             ast.parse(code, filename=f"notebook_cell_{index}.py")
+
+
+
+def test_colab_runs_cv_writer_and_exports_full_resume():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert 'profile_available = True' in source
+    assert 'cv_available = False' in source
+    assert 'if not profile_available:' in source
+    assert '"-m", "github2cv_ml.cv_demo"' in source
+    assert '"--profile", str(PROFILE_DIR / "candidate_profile.json")' in source
+    assert '"--temperature", str(MODEL_TEMPERATURE)' in source
+    assert '"resume.json"' in source
+    assert '"resume_preview.md"' in source
+    assert '"cv_writer_trace.json"' in source
+    assert 'bundle.write(result_file, arcname=f"cv/{filename}")' in source
+    assert 'if cv_available:' in source
