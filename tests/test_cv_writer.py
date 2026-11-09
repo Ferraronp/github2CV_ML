@@ -115,7 +115,7 @@ def test_writer_preserves_profile_project_paragraph_and_never_writes_extra_proje
     assert len(resume.sections[1].items) == 2
     assert resume.sections[1].items[0].text == input_profile.claims[3].text
     assert resume.sections[1].items[1].text == input_profile.claims[4].text
-    assert "Разработал с нуля" not in json.dumps(resume.model_dump())
+    assert "Разработал с нуля" not in resume.model_dump_json()
 
 
 @pytest.mark.parametrize(
