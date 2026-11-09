@@ -1,5 +1,6 @@
-"""Static checks for the real-model Colab smoke notebook in PR #27."""
+"""Static checks for real-model Repo Analyzer and Candidate Profile Colab demo."""
 
+import ast
 import json
 from pathlib import Path
 
@@ -29,10 +30,12 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert "feat/deep-repo-exploration" in source
-    assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
-    assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
-    assert "PREBUILT_SHA256" in source
+    assert "feat/candidate-profile-builder" in source
+    assert "unsloth/Qwen3.5-9B-GGUF" in source
+    assert "Qwen3.5-9B-Q4_K_M.gguf" in source
+    assert 'RELEASE_TAG = "b11896"' in source
+    assert 'ggml-org/llama.cpp/releases/download/' in source
+    assert 'llama-b11896-bin-ubuntu-cuda-12.8-x64.tar.gz' in source
     assert '"--jinja"' in source
     assert '"--host", "127.0.0.1"' in source
     assert "LocalOpenAIModel" in source
@@ -96,3 +99,67 @@ def test_colab_distinguishes_covered_plan_from_model_completion():
     )
     assert 'analysis["status"] == "plan_covered"' in source
     assert "not whole-repository or semantic coverage" in source
+
+
+def test_colab_runs_real_profile_builder_and_displays_its_model_proposals():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "CANDIDATE_LOGIN" in source
+    assert "MODEL_TEMPERATURE = 0.5" in source
+    assert 'temperature=MODEL_TEMPERATURE' in source
+    assert '"--temperature", str(MODEL_TEMPERATURE)' in source
+    assert "CACHED_ANALYSIS_FILES" in source
+    assert '"-m", "github2cv_ml.profile_demo"' in source
+    assert '"--analysis", str(RESULT_DIR / "analysis.json")' in source
+    assert '"--base-url", SERVER_BASE_URL' in source
+    assert 'candidate_profile.json' in source
+    assert 'profile_preview.md' in source
+    assert 'llm_profile_trace.json' in source
+    assert 'call["llm_proposed_skills"]' in source
+    assert 'call["llm_proposed_project_paragraph"]' in source
+
+
+def test_colab_uses_verified_official_cuda_release_without_building():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    ]
+    install = next(cell for cell in cells if 'RELEASE_TAG = "b11896"' in cell)
+    launch = next(cell for cell in cells if 'SERVER_PROCESS = subprocess.Popen' in cell)
+    assert "https://github.com/ggml-org/llama.cpp/releases/download/" in install
+    assert "BIN_SHA256" in install
+    assert "CUDART_SHA256" in install
+    assert "download_verified(" in install
+    assert "unpack_verified(" in install
+    assert '"--version"' in install
+    assert '"--list-devices"' in install
+    assert '"ldd", str(binary)' in install
+    assert 'cuda_backend' in install
+    assert 'platform.libc_ver()' in install
+    assert 'tarfile.open(' in install
+    assert 'filter="data"' in install
+    assert 'PREBUILT_URL' not in install
+    assert 'ai-dock/llama.cpp-cuda' not in install
+    assert "nvcc" not in install
+    assert 'cmake' not in install
+    assert '"--jinja"' in launch
+    assert '"--reasoning", "off"' in launch
+    assert '"--flash-attn", "on"' in launch
+    assert '"--cache-type-k", "q8_0"' in launch
+    assert '"--cache-type-v", "q8_0"' in launch
+    assert '"--host", "127.0.0.1"' in launch
+    assert 'SERVER_ENV' in launch
+
+
+def test_colab_python_cells_parse_without_syntax_errors():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    for index, cell in enumerate(notebook["cells"]):
+        if cell["cell_type"] == "code":
+            code = "".join(cell["source"])
+            ast.parse(code, filename=f"notebook_cell_{index}.py")

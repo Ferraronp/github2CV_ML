@@ -186,7 +186,9 @@ def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
         return BytesIO(json.dumps({"choices": [{"message": message}]}).encode())
 
     monkeypatch.setattr(runner, "urlopen", fake_urlopen)
-    model = LocalOpenAIModel(base_url="http://127.0.0.1:8080/v1", model="qwen-coder")
+    model = LocalOpenAIModel(
+        base_url="http://127.0.0.1:8080/v1", model="qwen-coder", temperature=0.5
+    )
     prompt = [{"role": "user", "content": "inspect"}]
     response = model.complete(prompt, tools=[{"type": "function", "function": {
         "name": "list_files", "parameters": {"type": "object", "properties": {}},
@@ -196,6 +198,7 @@ def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
     assert requests[0]["tool_choice"] == "required"
     assert requests[0]["model"] == "qwen-coder"
     assert requests[0]["messages"] == prompt
+    assert requests[0]["temperature"] == 0.5
 
 
 @pytest.mark.parametrize(
@@ -389,3 +392,9 @@ def test_source_implementation_ranked_before_evaluation_by_search():
     assert matches["scanned_files"] == 1
     assert matches["matches"][0]["path"] == "src/search.py"
     assert github.refs == [("src/search.py", SHA)]
+
+
+@pytest.mark.parametrize("temperature", [-0.1, 2.1, float("nan"), float("inf"), True])
+def test_http_adapter_rejects_invalid_temperature(temperature):
+    with pytest.raises(ValueError, match="Temperature"):
+        LocalOpenAIModel(temperature=temperature)
