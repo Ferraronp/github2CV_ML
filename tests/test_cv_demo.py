@@ -13,7 +13,10 @@ from github2cv_ml.cv_demo import (
     render_resume_preview,
 )
 from github2cv_ml.domain.profile import (
-    CandidateClaim, CandidateIdentity, CandidateProfile, ClaimKind,
+    CandidateClaim,
+    CandidateIdentity,
+    CandidateProfile,
+    ClaimKind,
 )
 from github2cv_ml.domain.resume import ResumeDocument
 
