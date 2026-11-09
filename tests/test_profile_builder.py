@@ -564,6 +564,11 @@ def test_distinct_technologies_stay_separate_when_no_equivalence_proposed():
             [{"canonical": "Redis", "aliases": ["FastAPI"]}],
             "invalid JSON/schema",
         ),
+        (
+            [{"canonical": "Redis", "aliases": ["FastAPI"],
+              "reason": "                  "}],
+            "invalid JSON/schema",
+        ),
     ],
 )
 def test_reconciliation_fails_closed_for_invalid_or_unjustified_merges(merges, match):
