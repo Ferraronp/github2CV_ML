@@ -1,5 +1,6 @@
 """Static checks for real-model Repo Analyzer and Candidate Profile Colab demo."""
 
+import ast
 import json
 from pathlib import Path
 
@@ -32,7 +33,9 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
     assert "feat/candidate-profile-builder" in source
     assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
     assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
-    assert "PREBUILT_SHA256" in source
+    assert 'LLAMA_CPP_REF = "b8660"' in source
+    assert '"-DGGML_CUDA=ON"' in source
+    assert '"--target", "llama-server"' in source
     assert '"--jinja"' in source
     assert '"--host", "127.0.0.1"' in source
     assert "LocalOpenAIModel" in source
@@ -115,3 +118,38 @@ def test_colab_runs_real_profile_builder_and_displays_its_model_proposals():
     assert 'llm_profile_trace.json' in source
     assert 'call["llm_proposed_skills"]' in source
     assert 'call["llm_proposed_project_paragraph"]' in source
+
+
+def test_colab_builds_pinned_upstream_llama_cpp_instead_of_ai_dock_release():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    cells = [
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    ]
+    build = next(cell for cell in cells if 'LLAMA_CPP_REF = "b8660"' in cell)
+    launch = next(cell for cell in cells if 'SERVER_PROCESS = subprocess.Popen' in cell)
+    assert 'https://github.com/ggml-org/llama.cpp.git' in build
+    assert '"git", "clone", "--depth", "1", "--branch", LLAMA_CPP_REF' in build
+    assert '"-DGGML_CUDA=ON"' in build
+    assert 'f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}"' in build
+    assert '"--target", "llama-server"' in build
+    assert 'shutil.which("nvcc")' in build
+    assert '"ldd", str(library)' in build
+    assert 'PREBUILT_URL' not in build
+    assert 'ai-dock/llama.cpp-cuda' not in build
+    assert '"--jinja"' in launch
+    assert '"--reasoning", "off"' in launch
+    assert '"--flash-attn", "on"' in launch
+    assert '"--cache-type-k", "q8_0"' in launch
+    assert '"--cache-type-v", "q8_0"' in launch
+    assert '"--host", "127.0.0.1"' in launch
+    assert 'SERVER_ENV' in launch
+
+
+def test_colab_python_cells_parse_without_syntax_errors():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    for index, cell in enumerate(notebook["cells"]):
+        if cell["cell_type"] == "code":
+            code = "".join(cell["source"])
+            ast.parse(code, filename=f"notebook_cell_{index}.py")
