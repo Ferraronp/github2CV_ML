@@ -111,12 +111,22 @@ profile = build_profile_from_analyses(
 ```
 
 Each repository is sent to the LLM in a separate bounded JSON-mode call,
-which returns its own proposed skill tags and one project paragraph, all
-referencing the supplied evidence IDs. Up to 20 skills are retained in the
-final `CandidateProfile`; duplicate names and repeated mentions within a
-repository do not inflate their rank. Project claims are ordered by diversity
-of source observation categories. The final short *About me* text and
-user-facing paragraphs belong to the CV Writer (#6).
+which returns its proposed skill tags and one project paragraph, all
+referencing the supplied evidence IDs. After per-repo extraction, **another
+bounded LLM call compares tag names across repositories**, proposing only
+well-justified exact synonyms (for example, Postgres/PostgreSQL). There is
+no fixed skill dictionary. A merge must use existing names, must contain a
+reason, and cannot reuse a name in another group; uncertain names stay
+separate. These checks validate the **merge format**, not its semantic truth.
+
+Up to 20 skills are retained in the final `CandidateProfile`; duplicate
+names and aliases are merged. Crucially, ranking is by **distinct
+repositories**, whereas each skill's `evidence_ids` is the **complete
+deduplicated union** of all LLM-cited sources across those repositories.
+The same skill mentioned several times in one repo does not inflate the
+score, but its evidence IDs are never dropped. Project claims are ordered
+by diversity of observations. The final short *About me* text and polished
+CV sections belong to CV Writer (#6).
 
 The original `RepoEvidence.id` records must remain available downstream to
 resolve source locators. The Profile Builder makes **no GitHub fetches** and
@@ -165,7 +175,8 @@ python -m github2cv_ml.profile_demo \
 - `candidate_profile.json` — валидный доменный контракт с claims и evidence IDs;
 - `profile_preview.md` — навыки-теги, связные абзацы проектов и ссылки на код;
 - `llm_profile_trace.json` — отдельная запись **каждого вызова модели**:
-  репозиторий, число входных evidence, время, предложенные навыки и абзац.
+  для репозиториев — число evidence, навыки и абзацы; для reconciliation —
+  какие теги сравнивались и какие объединения предложила LLM.
 
 Дополнительные `--analysis` должны относиться к различным репозиториям либо
 к одинаковой версии одного репозитория. При конфликте evidence/ревизий
