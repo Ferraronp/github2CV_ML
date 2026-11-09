@@ -31,8 +31,8 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
         if cell["cell_type"] == "code"
     )
     assert "feat/candidate-profile-builder" in source
-    assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
-    assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
+    assert "unsloth/Qwen3.5-9B-GGUF" in source
+    assert "Qwen3.5-9B-Q4_K_M.gguf" in source
     assert 'RELEASE_TAG = "b11896"' in source
     assert 'ggml-org/llama.cpp/releases/download/' in source
     assert 'llama-b11896-bin-ubuntu-cuda-12.8-x64.tar.gz' in source
@@ -109,6 +109,9 @@ def test_colab_runs_real_profile_builder_and_displays_its_model_proposals():
         if cell["cell_type"] == "code"
     )
     assert "CANDIDATE_LOGIN" in source
+    assert "MODEL_TEMPERATURE = 0.5" in source
+    assert 'temperature=MODEL_TEMPERATURE' in source
+    assert '"--temperature", str(MODEL_TEMPERATURE)' in source
     assert "CACHED_ANALYSIS_FILES" in source
     assert '"-m", "github2cv_ml.profile_demo"' in source
     assert '"--analysis", str(RESULT_DIR / "analysis.json")' in source
