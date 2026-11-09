@@ -1,10 +1,12 @@
 """Regression tests for evidence-only multi-repository candidate synthesis."""
 
+import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
-from github2cv_ml.agent.runner import RepoAnalysis
+from github2cv_ml.agent.runner import RepoAnalysis, RepoAnalyzer
 from github2cv_ml.domain.evidence import EvidenceKind, EvidenceSource, RepoEvidence
 from github2cv_ml.domain.profile import CandidateIdentity, ClaimKind
 from github2cv_ml.domain.repository import RepositoryRef
@@ -242,3 +244,42 @@ def test_empty_partial_and_limited_outputs_are_explicit_and_valid():
         build_candidate_profile(inputs, candidate=CANDIDATE, max_skills=21)
     with pytest.raises(ValueError, match="max_projects"):
         build_candidate_profile(inputs, candidate=CANDIDATE, max_projects=0)
+
+
+def test_extractor_generates_distinct_ids_for_same_claim_in_different_repos():
+    """Identical source paths and claims must not collide during aggregation."""
+
+    class FixedExtractor:
+        def complete(self, messages, *, tools=None, json_mode=False):
+            return {"content": json.dumps({
+                "file_summary": "FastAPI routes",
+                "observations": [{
+                    "claim": "Uses FastAPI for HTTP routing",
+                    "category": "technology",
+                    "source_path": "src/main.py",
+                    "line_start": 1,
+                    "line_end": 2,
+                }],
+            })}
+
+    fragment = {
+        "path": "src/main.py",
+        "start_line": 1,
+        "end_line": 2,
+        "numbered_text": "1: from fastapi import FastAPI\n2: app = FastAPI()",
+    }
+
+    def extracted(project):
+        browser = SimpleNamespace(
+            snapshot=SimpleNamespace(repository=repo(project)), commit_sha=SHA
+        )
+        _, result, rejected = RepoAnalyzer(FixedExtractor(), browser)._extract_file(fragment)
+        assert rejected == 0
+        return result[0]
+
+    first = extracted("api")
+    second = extracted("worker")
+    assert first.id != second.id
+    profile = build_candidate_profile([first, second], candidate=CANDIDATE)
+    fastapi = next(c for c in profile.claims if c.kind == ClaimKind.SKILL)
+    assert set(fastapi.evidence_ids) == {first.id, second.id}
