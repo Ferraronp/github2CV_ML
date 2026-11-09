@@ -258,7 +258,13 @@ class RepoAnalyzer:
             ):
                 rejected += 1
                 continue
-            key = f"{obs.claim.casefold()}|{obs.source_path}|{obs.line_start}|{obs.line_end}"
+            # IDs are global across an aggregated candidate profile. The
+            # same claim and path can occur in unrelated repositories.
+            key = (
+                f"{repo.owner.casefold()}/{repo.name.casefold()}|"
+                f"{self.browser.commit_sha}|{obs.claim.casefold()}|"
+                f"{obs.source_path}|{obs.line_start}|{obs.line_end}"
+            )
             evidence_id = "ev-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
             url_path = quote(obs.source_path, safe="/")
             url = (
