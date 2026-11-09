@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, field_validator
 
 from github2cv_ml.domain.base import ContractModel, NonEmptyId
 from github2cv_ml.domain.evidence import RepoEvidence
@@ -121,6 +121,14 @@ class ProposedSkillMerge(ContractModel):
     canonical: str = Field(min_length=1, max_length=64)
     aliases: list[str] = Field(min_length=1, max_length=32)
     reason: str = Field(min_length=10, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if len(stripped) < 10:
+            raise ValueError("A merge requires a non-empty equivalence explanation")
+        return stripped
 
 
 class SkillReconciliation(ContractModel):
