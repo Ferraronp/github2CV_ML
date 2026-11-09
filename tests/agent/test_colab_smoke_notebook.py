@@ -1,4 +1,4 @@
-"""Static checks for the real-model Colab smoke notebook in PR #27."""
+"""Static checks for real-model Repo Analyzer and Candidate Profile Colab demo."""
 
 import json
 from pathlib import Path
@@ -29,7 +29,7 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     )
-    assert "feat/deep-repo-exploration" in source
+    assert "feat/candidate-profile-builder" in source
     assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
     assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
     assert "PREBUILT_SHA256" in source
@@ -96,3 +96,22 @@ def test_colab_distinguishes_covered_plan_from_model_completion():
     )
     assert 'analysis["status"] == "plan_covered"' in source
     assert "not whole-repository or semantic coverage" in source
+
+
+def test_colab_runs_real_profile_builder_and_displays_its_model_proposals():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    source = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+    assert "CANDIDATE_LOGIN" in source
+    assert "CACHED_ANALYSIS_FILES" in source
+    assert '"-m", "github2cv_ml.profile_demo"' in source
+    assert '"--analysis", str(RESULT_DIR / "analysis.json")' in source
+    assert '"--base-url", SERVER_BASE_URL' in source
+    assert 'candidate_profile.json' in source
+    assert 'profile_preview.md' in source
+    assert 'llm_profile_trace.json' in source
+    assert 'call["llm_proposed_skills"]' in source
+    assert 'call["llm_proposed_project_paragraph"]' in source
