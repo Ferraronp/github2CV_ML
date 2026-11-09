@@ -33,9 +33,9 @@ def test_colab_smoke_exercises_real_llm_server_and_cli():
     assert "feat/candidate-profile-builder" in source
     assert "unsloth/Qwen2.5-Coder-7B-Instruct-GGUF" in source
     assert "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf" in source
-    assert 'LLAMA_CPP_REF = "b8660"' in source
-    assert '"-DGGML_CUDA=ON"' in source
-    assert '"--target", "llama-server"' in source
+    assert 'RELEASE_TAG = "b11896"' in source
+    assert 'ggml-org/llama.cpp/releases/download/' in source
+    assert 'llama-b11896-bin-ubuntu-cuda-12.8-x64.tar.gz' in source
     assert '"--jinja"' in source
     assert '"--host", "127.0.0.1"' in source
     assert "LocalOpenAIModel" in source
@@ -120,24 +120,31 @@ def test_colab_runs_real_profile_builder_and_displays_its_model_proposals():
     assert 'call["llm_proposed_project_paragraph"]' in source
 
 
-def test_colab_builds_pinned_upstream_llama_cpp_instead_of_ai_dock_release():
+def test_colab_uses_verified_official_cuda_release_without_building():
     notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
     cells = [
         "".join(cell["source"])
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     ]
-    build = next(cell for cell in cells if 'LLAMA_CPP_REF = "b8660"' in cell)
+    install = next(cell for cell in cells if 'RELEASE_TAG = "b11896"' in cell)
     launch = next(cell for cell in cells if 'SERVER_PROCESS = subprocess.Popen' in cell)
-    assert 'https://github.com/ggml-org/llama.cpp.git' in build
-    assert '"git", "clone", "--depth", "1", "--branch", LLAMA_CPP_REF' in build
-    assert '"-DGGML_CUDA=ON"' in build
-    assert 'f"-DCMAKE_CUDA_ARCHITECTURES={cuda_arch}"' in build
-    assert '"--target", "llama-server"' in build
-    assert 'shutil.which("nvcc")' in build
-    assert '"ldd", str(library)' in build
-    assert 'PREBUILT_URL' not in build
-    assert 'ai-dock/llama.cpp-cuda' not in build
+    assert "https://github.com/ggml-org/llama.cpp/releases/download/" in install
+    assert "BIN_SHA256" in install
+    assert "CUDART_SHA256" in install
+    assert "download_verified(" in install
+    assert "unpack_verified(" in install
+    assert '"--version"' in install
+    assert '"--list-devices"' in install
+    assert '"ldd", str(binary)' in install
+    assert 'cuda_backend' in install
+    assert 'platform.libc_ver()' in install
+    assert 'tarfile.open(' in install
+    assert 'filter="data"' in install
+    assert 'PREBUILT_URL' not in install
+    assert 'ai-dock/llama.cpp-cuda' not in install
+    assert "nvcc" not in install
+    assert 'cmake' not in install
     assert '"--jinja"' in launch
     assert '"--reasoning", "off"' in launch
     assert '"--flash-attn", "on"' in launch
