@@ -229,3 +229,56 @@ Explorer, Extractor, Profile Builder и проверки tool calling через
 
 В отдельных CLI запускается тот же режим через аргумент
 `--temperature 0.5` (необязательный, по умолчанию `0.1`).
+
+## CV Writer — задача #6
+
+Третья ML-стадия преобразует готовый `CandidateProfile` в существующий
+доменный контракт `ResumeDocument` (JSON, без PDF/HTML).
+**Репозитории и исходники ей не передаются.**
+
+Структура рассчитана на согласованный формат резюме в духе hh.ru:
+
+- короткое **«О себе»** (2–3 предложения) и необязательный технический заголовок;
+- **до 20 навыков-тегов**;
+- **каждый проект — отдельный связный абзац**;
+- необязательная секция «Задачи и достижения» — отдельные пункты из
+  существующих profile claims типов `achievement` / `responsibility`.
+  Если таких claims нет, пустые достижения не придумываются.
+
+LLM в JSON-режиме формирует **только вводную часть**, указывая `claim_ids`
+для каждого утверждения. Python проверяет все ID, структуру и ограничения.
+Навыки, проекты и достижения **не перефразируются повторно**: они уже
+сформулированы Profile Builder и копируются в `ResumeItem` с точными
+ссылками на соответствующие `CandidateClaim.id`. Так не возникает второго
+шанса выдумать детали проектов. При пустом профиле не делается ни одного
+вызова LLM, выход остаётся честно неполным.
+
+Пример вызова из Python:
+
+```python
+from github2cv_ml.agent.runner import LocalOpenAIModel
+from github2cv_ml.cv_writer import write_resume
+from github2cv_ml.domain import CandidateProfile
+
+profile = CandidateProfile.model_validate_json(profile_json)
+model = LocalOpenAIModel(model="qwen-3.5", temperature=0.5)
+resume = write_resume(profile, model=model)
+# resume.model_dump_json() соответствует ResumeDocument v1.0.
+```
+
+Для демонстрации можно использовать уже готовый `candidate_profile.json`
+или архив из предыдущего Colab — **повторный анализ GitHub не требуется**:
+
+```bash
+python -m github2cv_ml.cv_demo \
+  --profile ./github2cv_live_profile_demo.zip \
+  --model qwen-3.5 --temperature 0.5 \
+  --output ./results/cv_demo
+```
+
+Команда обращается только к локальному OpenAI-совместимому LLM-серверу и
+создаёт `resume.json`, `resume_preview.md` и `cv_writer_trace.json`.
+Важная граница: сохранённые ID доказывают **происхождение текста из
+профильных claims**, но не истинность этих claims. Семантическая проверка
+на уровне исходного кода остаётся задачей #29; CV Writer не должен выдавать
+непроверенное авторство, метрики, опыт работы или квалификацию.
