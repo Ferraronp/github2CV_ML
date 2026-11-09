@@ -63,26 +63,37 @@ class TracingProfileModel:
         answer = self.model.complete(messages, tools=tools, json_mode=json_mode)
         elapsed = round(time.monotonic() - started, 3)
         content = answer.get("content", "") if isinstance(answer, dict) else ""
-        proposed_skills: list[str] = []
-        paragraph = None
         try:
             data = json.loads(content)
+        except (ValueError, TypeError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if payload.get("task") == "skill_reconciliation":
+            # This is a separate LLM call for merging aliases across repos.
+            self.calls.append({
+                "stage": "skill_reconciliation",
+                "input_skills": [
+                    skill.get("name") for skill in payload.get("skills", [])
+                ],
+                "duration_seconds": elapsed,
+                "llm_proposed_merges": data.get("merges", []),
+            })
+        else:
             proposed_skills = [
                 str(item["name"]) for item in data.get("skills", [])
                 if isinstance(item, dict) and isinstance(item.get("name"), str)
             ]
             project = data.get("project")
-            if isinstance(project, dict):
-                paragraph = project.get("paragraph")
-        except (ValueError, TypeError, AttributeError):
-            pass
-        self.calls.append({
-            "repository": payload["repository"],
-            "evidence_count": len(payload["observations"]),
-            "duration_seconds": elapsed,
-            "llm_proposed_skills": proposed_skills,
-            "llm_proposed_project_paragraph": paragraph,
-        })
+            paragraph = project.get("paragraph") if isinstance(project, dict) else None
+            self.calls.append({
+                "stage": "repository_profile",
+                "repository": payload["repository"],
+                "evidence_count": len(payload["observations"]),
+                "duration_seconds": elapsed,
+                "llm_proposed_skills": proposed_skills,
+                "llm_proposed_project_paragraph": paragraph,
+            })
         return answer
 
 
