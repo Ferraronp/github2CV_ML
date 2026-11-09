@@ -132,3 +132,48 @@ contribution. The model should not infer individual authorship. Conflicting
 evidence IDs and mixed repository revisions are rejected rather than
 silently attributed to incorrect sources. Oversized per-repository inputs
 fail with an explicit size-limit error; no silent truncation occurs.
+
+## Живое демо: LLM генерирует навыки и описания проектов
+
+Для демонстрации работы **модели**, а не жёстких правил, используйте
+[Colab-ноутбук](notebooks/colab_repo_analyzer_toolcalling_smoke.ipynb) из
+ветки `feat/candidate-profile-builder`. Он выполняет две последовательные ML-стадии:
+сначала Repo Analyzer получает evidence через GitHub, затем Candidate Profile
+Builder **повторно не читает GitHub**, а передаёт готовые наблюдения локальной
+Qwen и получает от неё навыки-теги и русские абзацы о проектах.
+
+Также можно показать работу именно с кэшем — из готовых файлов, без запуска
+Repo Analyzer:
+
+```bash
+# Требуется уже запущенный локальный llama-server
+python -m github2cv_ml.profile_demo \
+  --analysis ./repo_analyzer_smoke_whole.zip \
+  --github-login demo_developer \
+  --base-url http://127.0.0.1:8080/v1 \
+  --model qwen-coder \
+  --output ./results/profile_demo
+
+# Для двух разных репозиториев добавьте ещё один --analysis:
+#   --analysis ./another_repo/analysis.json
+```
+
+Поддерживаются `analysis.json` и ZIP-архивы предыдущих Colab smoke-прогонов.
+На выходе появляются три **реально созданных**, а не подготовленных заранее,
+артефакта:
+
+- `candidate_profile.json` — валидный доменный контракт с claims и evidence IDs;
+- `profile_preview.md` — навыки-теги, связные абзацы проектов и ссылки на код;
+- `llm_profile_trace.json` — отдельная запись **каждого вызова модели**:
+  репозиторий, число входных evidence, время, предложенные навыки и абзац.
+
+Дополнительные `--analysis` должны относиться к различным репозиториям либо
+к одинаковой версии одного репозитория. При конфликте evidence/ревизий
+генерация явно завершается ошибкой. Все исходные файлы по-прежнему
+остаются в GitHub; демо потребляет только сохранённые результаты анализа.
+
+**Оговорка:** код проверяет существование evidence ID, а не истинность
+утверждения. Реальная Qwen может выдать неточный навык или неверную формулировку;
+результат — черновик для проверки, а не готовое резюме. Автоматические CI-тесты
+используют имитацию LLM; реальный GPU-прогон нового Profile Builder пока не
+подтверждён.
