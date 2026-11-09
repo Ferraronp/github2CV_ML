@@ -72,3 +72,54 @@ python -m pytest
 CI runs the same lint and test checks for pull requests and pushes to `main`.
 
 Development work is tracked in GitHub issues and merged through reviewed squash pull requests.
+
+## Candidate Profile Builder (Issue #5)
+
+Profile synthesis is deterministic and makes **no** GitHub or LLM calls. It
+accepts normalized repository evidence from any number of repositories
+(including backend-cached analyses) and returns the existing
+`CandidateProfile` domain contract:
+
+```python
+from github2cv_ml.domain import CandidateIdentity, RepoEvidence
+from github2cv_ml.profile_builder import (
+    build_candidate_profile,
+    build_profile_from_analyses,
+)
+
+identity = CandidateIdentity(github_login="developer")  # supplied by backend
+
+# Input A: evidence from one or multiple repository analyses.
+profile = build_candidate_profile(
+    [RepoEvidence.model_validate(payload) for payload in evidence_payloads],
+    candidate=identity,
+)
+
+# Input B: previously serialized or fresh RepoAnalysis objects.
+# Backend chooses fresh vs cached per repository before passing it here.
+profile = build_profile_from_analyses(analyses, candidate=identity)
+```
+
+The result contains up to **20 canonical skill-tag claims** and one
+evidence-backed project claim **per repository**, ordered by diversity of
+observations. Project claim text is a conservative draft paragraph; the
+CV Writer (#6) will produce the final short summary, tag list and polished
+**one-paragraph-per-project** presentation.
+
+Each claim references existing `RepoEvidence.id` values; keep the original
+evidence records available downstream to resolve their repository and source
+URLs. A skill appearing ten times in one repository counts only once for
+ranking; multiple distinct repositories count as broader evidence. All
+outputs have stable claim IDs independent of input order.
+
+Important limits: this is vocabulary-based tagging and prioritization, **not
+semantic verification**. An LLM extractor's incorrect statement may still
+produce a tag; source locators are not sufficient to assert personal authorship.
+No skill is inferred from a file extension, and a project's existence does not
+mean the candidate personally implemented it. Backend-provided identity and
+declared role must stay separate from repository observations.
+
+For safety, if the backend mixes two commits of the same repository or if
+different evidence records reuse the same ID, the builder rejects the input
+instead of silently attributing claims to incorrect source material. Neither
+raw repository files nor an S3 storage layer are required for profile synthesis.
