@@ -67,6 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=Path("results"))
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--max-reads", type=int, default=6)
+    parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--allow-remote-model", action="store_true",
                         help="Explicitly allow sending source code outside the local machine")
     options = parser.parse_args(argv)
@@ -86,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         model=options.model,
         api_key=os.environ.get("LLM_API_KEY", "not-needed"),
         allow_remote=options.allow_remote_model,
+        temperature=options.temperature,
     )
     analysis = RepoAnalyzer(
         model=model,
