@@ -181,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8080/v1")
     parser.add_argument("--model", default="qwen-coder")
     parser.add_argument("--max-skills", type=int, default=20)
+    parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--output", type=Path, default=Path("results/profile_demo"))
     parser.add_argument("--allow-remote-model", action="store_true")
     args = parser.parse_args(argv)
@@ -192,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
             base_url=args.base_url, model=args.model,
             api_key=os.environ.get("LLM_API_KEY", "not-needed"),
             allow_remote=args.allow_remote_model,
+            temperature=args.temperature,
         )
         profile = generate_profile_artifacts(
             args.analysis, candidate=identity, model=model,
