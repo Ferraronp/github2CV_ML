@@ -7,7 +7,10 @@ import pytest
 
 from github2cv_ml.cv_writer import write_resume
 from github2cv_ml.domain.profile import (
-    CandidateClaim, CandidateIdentity, CandidateProfile, ClaimKind,
+    CandidateClaim,
+    CandidateIdentity,
+    CandidateProfile,
+    ClaimKind,
 )
 from github2cv_ml.domain.resume import ResumeDocument
 
@@ -207,8 +210,10 @@ def test_writer_rejects_claim_id_that_was_excluded_by_limits():
 
 def test_writer_refuses_oversized_context_before_invoking_model():
     model = FakeWriter()
+    bloated = profile()
+    bloated.claims[3].text = "Architecture implementation. " * 100
     with pytest.raises(ValueError, match="CV overview context exceeds"):
-        write_resume(profile(), model=model, max_input_chars=1000)
+        write_resume(bloated, model=model, max_input_chars=1000)
     assert model.calls == []
 
 
