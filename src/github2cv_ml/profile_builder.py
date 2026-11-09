@@ -44,7 +44,9 @@ Recognize concrete technologies and technical competencies only when directly
 supported by provided observations. Use familiar canonical names where possible.
 Avoid speculative skill synonyms, generic adjectives and trivial concepts.
 Return 0-12 high-value unique skills; no need to fill a quota.
-Project paragraph: 2-4 short sentences, only about the described implementation.
+Project paragraph: write 2-4 short natural sentences IN RUSSIAN, as a
+coherent paragraph (not bullet points), only about the implementation.
+Keep common technical skill tags in their conventional names (e.g. FastAPI).
 Do not infer candidate authorship, employment, project impact, performance,
 deployment, or contributions unless evidence and candidate context prove it.
 Use only exact evidence_ids from the input. Every skill and the project paragraph
