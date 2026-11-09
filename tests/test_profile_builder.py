@@ -84,8 +84,6 @@ def test_aggregates_multiple_repositories_into_valid_profile_with_provenance():
     skill_claims = [c for c in profile.claims if c.kind == ClaimKind.SKILL]
     project_claims = [c for c in profile.claims if c.kind == ClaimKind.PROJECT]
     assert [c.text for c in skill_claims] == [
-        "FastAPI", "PostgreSQL", "Redis", "Pytest", "SQLAlchemy",
-    ] or [c.text for c in skill_claims] == [
         "FastAPI", "Redis", "PostgreSQL", "Pytest", "SQLAlchemy",
     ]
     # Same skill in many files of one repo gives ONE source, not extra votes.
@@ -141,7 +139,7 @@ def test_skills_only_from_explicit_observations_not_paths_or_repo_metadata():
 
 def test_project_ranking_prefers_diverse_categories_over_repeated_technology():
     repetitive = [
-        evidence(f"r{i}", "noisy", "FastAPI endpoint " + str(i), start=i)
+        evidence(f"r{i}", "noisy", "FastAPI endpoint " + str(i), start=i + 1)
         for i in range(12)
     ]
     diverse = [
