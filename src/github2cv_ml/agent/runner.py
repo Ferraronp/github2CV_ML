@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -118,6 +119,7 @@ class LocalOpenAIModel:
         api_key: str = "not-needed",
         timeout: float = 180.0,
         allow_remote: bool = False,
+        temperature: float = 0.1,
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -128,8 +130,13 @@ class LocalOpenAIModel:
             raise ValueError("Unexpected credentials or query in model URL")
         self.url = base_url.rstrip("/") + "/chat/completions"
         self.model = model
+        if isinstance(temperature, bool) or not isinstance(temperature, (float, int)):
+            raise ValueError("Temperature must be a finite number between 0 and 2")
+        if not math.isfinite(temperature) or not 0 <= temperature <= 2:
+            raise ValueError("Temperature must be a finite number between 0 and 2")
         self.api_key = api_key
         self.timeout = timeout
+        self.temperature = float(temperature)
 
     def complete(
         self,
@@ -141,7 +148,7 @@ class LocalOpenAIModel:
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": self.temperature,
             "max_tokens": 900,
             "stream": False,
         }
