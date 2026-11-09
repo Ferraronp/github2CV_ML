@@ -121,7 +121,7 @@ def test_skill_rank_is_by_distinct_repositories_not_number_of_mentions():
     profile = build_candidate_profile(repeated + cross_repo, candidate=CANDIDATE)
     skills = [c for c in profile.claims if c.kind == ClaimKind.SKILL]
     assert [c.text for c in skills] == ["Redis", "FastAPI"]
-    assert skills[0].evidence_ids == ["r1", "r2"]
+    assert skills[0].evidence_ids == ["r2", "r1"]  # stable order by repository key
     assert len(skills[1].evidence_ids) == 1
 
 
