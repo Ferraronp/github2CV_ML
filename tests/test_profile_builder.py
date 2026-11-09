@@ -85,16 +85,22 @@ def proposal(
 class FakeProfileModel:
     """Fixed structured LLM responses, selected by repository (no keyword engine)."""
 
-    def __init__(self, responses: dict[str, dict] | None = None):
+    def __init__(
+        self, responses: dict[str, dict] | None = None, merges: list[dict] | None = None
+    ):
         self.responses = responses or {}
+        self.merges = merges or []
         self.calls: list[dict] = []
 
     def complete(self, messages, *, tools=None, json_mode=False):
         assert tools is None
         assert json_mode is True
-        assert "NO predetermined list" in messages[0]["content"]
         user_input = json.loads(messages[1]["content"])
         self.calls.append(user_input)
+        if user_input.get("task") == "skill_reconciliation":
+            assert "CLEAR synonyms" in messages[0]["content"]
+            return {"content": json.dumps({"merges": self.merges})}
+        assert "NO predetermined list" in messages[0]["content"]
         return {
             "content": json.dumps(self.responses[user_input["repository"]]),
         }
@@ -137,15 +143,16 @@ def test_multi_repository_profile_uses_model_selected_skills_and_source_ids():
         "FastAPI", "Redis", "PostgreSQL", "Pytest", "SQLAlchemy",
     ]
     assert next(c for c in skills if c.text == "FastAPI").evidence_ids == [
-        "a1", "b1",
+        "a1", "a2", "b1",
     ]
     assert len(projects) == 3
     assert projects[0].text.startswith("example/api: The repository")
     assert all("I built" not in c.text for c in projects)
-    assert len(model.calls) == 3
-    assert [call["repository"] for call in model.calls] == [
+    assert len(model.calls) == 4  # three repositories, then one synonym check
+    assert [call["repository"] for call in model.calls if "repository" in call] == [
         "example/api", "example/tests", "example/worker",
     ]
+    assert model.calls[-1]["task"] == "skill_reconciliation"
     assert model.calls[0]["observations"][0]["id"] == "a1"
     for claim in profile.claims:
         assert set(claim.evidence_ids) <= {item.id for item in items}
@@ -195,7 +202,7 @@ def test_skill_rank_counts_repositories_not_repeated_mentions():
     skills = [c for c in profile.claims if c.kind == ClaimKind.SKILL]
     assert [c.text for c in skills] == ["Redis", "FastAPI"]
     assert skills[0].evidence_ids == ["r2", "r1"]
-    assert skills[1].evidence_ids == ["p0"]
+    assert skills[1].evidence_ids == [f"p{i}" for i in range(15)]
 
 
 def test_duplicate_skill_names_are_merged_case_insensitively():
@@ -213,7 +220,7 @@ def test_duplicate_skill_names_are_merged_case_insensitively():
     skills = [c for c in profile.claims if c.kind == ClaimKind.SKILL]
     assert len(skills) == 1
     assert skills[0].text == "FastAPI"
-    assert skills[0].evidence_ids == ["a"]
+    assert skills[0].evidence_ids == ["a", "b"]
 
 
 def test_project_ranking_prefers_diversity_over_repeated_technology():
@@ -288,7 +295,7 @@ def test_cached_and_fresh_analyses_share_one_pipeline_without_github_calls():
         candidate=CANDIDATE, model=FakeProfileModel(responses),
     )
     assert profile.claims == expected.claims
-    assert len(model.calls) == 2
+    assert len(model.calls) == 3  # two repositories + synonym reconciliation
     assert len([c for c in profile.claims if c.kind == ClaimKind.PROJECT]) == 2
 
 
@@ -444,3 +451,151 @@ def test_extractor_ids_are_distinct_for_same_claim_in_two_repositories():
     )
     fastapi = next(c for c in profile.claims if c.kind == ClaimKind.SKILL)
     assert set(fastapi.evidence_ids) == {first.id, second.id}
+
+
+
+def test_reviewer_blocker_keeps_all_evidence_but_counts_each_repo_once():
+    """All four supporting IDs are preserved; repeated mentions do not boost rank."""
+    items = [
+        evidence("a1", "api", "FastAPI endpoint"),
+        evidence("a2", "api", "FastAPI router", start=4),
+        evidence("b1", "worker", "FastAPI integration"),
+        evidence("b2", "worker", "FastAPI handler", start=4),
+        evidence("z1", "api", "Redis cache", start=7),
+    ]
+    model = FakeProfileModel({
+        "example/api": proposal(
+            [
+                ("FastAPI", ["a1", "a2", "a1"]),
+                ("FastAPI", ["a2"]),
+                ("Redis", ["z1"]),
+            ],
+            "This API provides HTTP endpoints.", ["a1", "a2"],
+        ),
+        "example/worker": proposal(
+            [("FastAPI", ["b1", "b2", "b1"])],
+            "This service integrates with FastAPI.", ["b1", "b2"],
+        ),
+    })
+    profile = build_candidate_profile(items, candidate=CANDIDATE, model=model)
+    skills = [claim for claim in profile.claims if claim.kind == ClaimKind.SKILL]
+    assert [claim.text for claim in skills] == ["FastAPI", "Redis"]
+    assert skills[0].evidence_ids == ["a1", "a2", "b1", "b2"]
+    assert len(set(skills[0].evidence_ids)) == 4
+    assert skills[1].evidence_ids == ["z1"]
+
+
+def test_reviewer_blocker_reconciles_postgres_and_postgresql_without_dictionary():
+    items = [
+        evidence("a", "api", "Postgres transaction management"),
+        evidence("b", "worker", "PostgreSQL upsert implementation"),
+        evidence("c", "worker", "PostgreSQL job claiming", start=4),
+    ]
+    model = FakeProfileModel(
+        {
+            "example/api": proposal(
+                [("Postgres", ["a"])],
+                "This repository manages Postgres transactions.", ["a"],
+            ),
+            "example/worker": proposal(
+                [("PostgreSQL", ["b", "c"])],
+                "The worker uses PostgreSQL locking.", ["b", "c"],
+            ),
+        },
+        merges=[{
+            "canonical": "PostgreSQL",
+            "aliases": ["Postgres"],
+            "reason": "Postgres is a short name of PostgreSQL.",
+        }],
+    )
+    profile = build_candidate_profile(items, candidate=CANDIDATE, model=model)
+    skills = [claim for claim in profile.claims if claim.kind == ClaimKind.SKILL]
+    assert [claim.text for claim in skills] == ["PostgreSQL"]
+    assert skills[0].evidence_ids == ["a", "b", "c"]
+    assert model.calls[-1]["task"] == "skill_reconciliation"
+    assert [row["name"] for row in model.calls[-1]["skills"]] == [
+        "Postgres", "PostgreSQL",
+    ]
+
+
+def test_distinct_technologies_stay_separate_when_no_equivalence_proposed():
+    items = [
+        evidence("a", "api", "Python API"),
+        evidence("b", "worker", "PyTorch model inference"),
+    ]
+    model = FakeProfileModel({
+        "example/api": proposal(
+            [("Python", ["a"])], "Python implementation.", ["a"],
+        ),
+        "example/worker": proposal(
+            [("PyTorch", ["b"])], "PyTorch implementation.", ["b"],
+        ),
+    })
+    profile = build_candidate_profile(items, candidate=CANDIDATE, model=model)
+    skills = [claim for claim in profile.claims if claim.kind == ClaimKind.SKILL]
+    assert {claim.text for claim in skills} == {"Python", "PyTorch"}
+    assert len(skills) == 2
+    assert model.calls[-1]["task"] == "skill_reconciliation"
+
+
+@pytest.mark.parametrize(
+    "merges,match",
+    [
+        (
+            [{"canonical": "Redis", "aliases": ["NotInInput"],
+              "reason": "A supposed alias of an existing technology"}],
+            "invented an unknown",
+        ),
+        (
+            [{"canonical": "Redis", "aliases": ["Redis"],
+              "reason": "A reflexive alias that repeats itself"}],
+            "duplicate members",
+        ),
+        (
+            [
+                {"canonical": "Redis", "aliases": ["FastAPI"],
+                 "reason": "First group uses FastAPI name"},
+                {"canonical": "SQLAlchemy", "aliases": ["FastAPI"],
+                 "reason": "Second group repeats FastAPI name"},
+            ],
+            "reuses a name",
+        ),
+        (
+            [{"canonical": "Redis", "aliases": ["FastAPI"]}],
+            "invalid JSON/schema",
+        ),
+    ],
+)
+def test_reconciliation_fails_closed_for_invalid_or_unjustified_merges(merges, match):
+    items = [
+        evidence("a", "api", "Redis and FastAPI"),
+        evidence("b", "api", "SQLAlchemy integration", start=4),
+    ]
+    model = FakeProfileModel({
+        "example/api": proposal(
+            [("Redis", ["a"]), ("FastAPI", ["a"]), ("SQLAlchemy", ["b"])],
+            "API and database implementation.", ["a", "b"],
+        )
+    }, merges=merges)
+    with pytest.raises(ValueError, match=match):
+        build_candidate_profile(items, candidate=CANDIDATE, model=model)
+
+
+def test_no_reconciliation_when_single_skill_or_no_evidence():
+    model = FakeProfileModel({
+        "example/api": proposal(
+            [("FastAPI", ["a", "b"])],
+            "An API service.", ["a"],
+        ),
+    })
+    profile = build_candidate_profile(
+        [evidence("a", "api", "FastAPI route"),
+         evidence("b", "api", "FastAPI handler", start=4)],
+        candidate=CANDIDATE,
+        model=model,
+    )
+    assert profile.claims[0].evidence_ids == ["a", "b"]
+    assert len(model.calls) == 1
+    empty = build_candidate_profile([], candidate=CANDIDATE, model=model)
+    assert empty.claims == []
+    assert len(model.calls) == 1
