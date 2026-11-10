@@ -65,8 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8080/v1")
     parser.add_argument("--model", default="qwen-coder")
     parser.add_argument("--output", type=Path, default=Path("results"))
-    parser.add_argument("--max-steps", type=int, default=12)
-    parser.add_argument("--max-reads", type=int, default=6)
+    parser.add_argument("--max-steps", type=int, default=28)
+    parser.add_argument("--max-reads", type=int, default=12)
+    parser.add_argument("--min-planned-reads", type=int, default=0,
+                        help="Require this many distinct planned files before accepting finish")
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--allow-remote-model", action="store_true",
                         help="Explicitly allow sending source code outside the local machine")
@@ -94,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         browser=browser,
         max_steps=options.max_steps,
         max_read_calls=options.max_reads,
+        min_planned_reads=options.min_planned_reads,
     ).run()
     options.output.mkdir(parents=True, exist_ok=True)
     (options.output / "analysis.json").write_text(

@@ -604,3 +604,17 @@ def test_no_reconciliation_when_single_skill_or_no_evidence():
     empty = build_candidate_profile([], candidate=CANDIDATE, model=model)
     assert empty.claims == []
     assert len(model.calls) == 1
+
+
+
+def test_profile_prompt_prioritizes_engaging_specificity_not_marketing_hype():
+    """CV project descriptions should be readable, factual portfolio paragraphs."""
+    from github2cv_ml.profile_builder import PROFILE_PROMPT
+
+    assert "recruiter-friendly portfolio paragraph" in PROFILE_PROMPT
+    assert "реализует" in PROFILE_PROMPT
+    assert "production-ready" in PROFILE_PROMPT
+    assert "direct evidence" in PROFILE_PROMPT
+    assert "do not guess the architecture" in PROFILE_PROMPT
+    assert "Do not infer candidate authorship" in PROFILE_PROMPT
+    assert "Use only exact evidence_ids" in PROFILE_PROMPT

@@ -45,8 +45,21 @@ supported by provided observations. Use familiar canonical names where possible.
 Avoid speculative skill synonyms, generic adjectives and trivial concepts.
 Return 0-12 high-value unique skills; no need to fill a quota.
 Project paragraph: write 2-4 short natural sentences IN RUSSIAN, as a
-coherent paragraph (not bullet points), only about the implementation.
+coherent, recruiter-friendly portfolio paragraph (not bullet points).
+Present the project clearly: what it is for (only if supported), which
+meaningful implementation mechanisms are evidenced, and how the supported
+components work together. Lead with the project's purpose or key behavior
+rather than a dry list of library imports. Prefer strong, concrete verbs
+such as "реализует", "обрабатывает", "связывает" when the OBSERVATIONS
+directly support them. Prefer concise readable engineering language to
+"в коде найдено", generic descriptions, repetitive "используется", or
+an exhaustive technology dump. Be engaging through specificity, not hype.
 Keep common technical skill tags in their conventional names (e.g. FastAPI).
+Do not assert "высокопроизводительный", "масштабируемый", "оптимизированный",
+"production-ready", time savings or improved accuracy without direct evidence.
+Do not imply a framework, library or model serves a different technical role.
+When evidence covers only a small part of a project, describe only that
+part; do not guess the architecture or falsely portray it as the entire repo.
 Do not infer candidate authorship, employment, project impact, performance,
 deployment, or contributions unless evidence and candidate context prove it.
 Use only exact evidence_ids from the input. Every skill and the project paragraph
@@ -242,23 +255,41 @@ def _propose(
             f"Evidence context for {repository} exceeds {max_input_chars} characters; "
             "split or summarize inputs before profile synthesis"
         )
-    response = model.complete(
-        [
-            {"role": "system", "content": PROFILE_PROMPT},
-            {"role": "user", "content": payload},
-        ],
-        json_mode=True,
-    )
-    if not isinstance(response, dict):
-        raise ValueError(f"Profile model returned malformed response for {repository}")
-    raw = response.get("content")
-    if not isinstance(raw, str):
-        raise ValueError(f"Profile model omitted JSON content for {repository}")
-    try:
-        parsed = json.loads(raw)
-        return RepositoryProposal.model_validate(parsed)
-    except (ValueError, TypeError, ValidationError) as exc:
-        raise ValueError(f"Profile model returned invalid JSON/schema for {repository}") from exc
+    messages = [
+        {"role": "system", "content": PROFILE_PROMPT},
+        {"role": "user", "content": payload},
+    ]
+    for attempt in range(2):
+        response = model.complete(messages, json_mode=True)
+        if not isinstance(response, dict):
+            raise ValueError(f"Profile model returned malformed response for {repository}")
+        raw = response.get("content")
+        if not isinstance(raw, str):
+            raise ValueError(f"Profile model omitted JSON content for {repository}")
+        try:
+            parsed = json.loads(raw)
+            return RepositoryProposal.model_validate(parsed)
+        except (ValueError, TypeError, ValidationError) as exc:
+            if attempt:
+                # Preserve the original validation details in the exception
+                # chain; the demo CLI also writes raw model output for debugging.
+                raise ValueError(
+                    f"Profile model returned invalid JSON/schema for {repository}: "
+                    f"{str(exc)[:250]}"
+                ) from exc
+            # An invalid JSON object must never be silently accepted or have
+            # citations guessed. Retry once with a concise formatting reminder.
+            messages = [
+                {"role": "system", "content": PROFILE_PROMPT + (
+                    "\\nIMPORTANT RETRY: Previous response was not valid JSON for "
+                    "the required schema. Output a NEW complete JSON object with "
+                    "skills (name and evidence_ids) and project (paragraph and "
+                    "evidence_ids). Cite only IDs supplied in the user data. "
+                    "No markdown or explanation."
+                )},
+                {"role": "user", "content": payload},
+            ]
+    raise AssertionError("Unreachable profile proposal attempt")
 
 
 def _reconcile_skill_names(

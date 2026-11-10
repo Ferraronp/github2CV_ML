@@ -50,6 +50,7 @@ class TracingProfileModel:
     def __init__(self, model: ProfileModel) -> None:
         self.model = model
         self.calls: list[dict[str, Any]] = []
+        self.raw_responses: list[dict[str, Any]] = []
 
     def complete(
         self,
@@ -63,6 +64,13 @@ class TracingProfileModel:
         answer = self.model.complete(messages, tools=tools, json_mode=json_mode)
         elapsed = round(time.monotonic() - started, 3)
         content = answer.get("content", "") if isinstance(answer, dict) else ""
+        # Retain raw model text in memory so failed validation can be diagnosed.
+        # Save it only on failure, not in the normal trace.
+        self.raw_responses.append({
+            "stage": payload.get("task", "repository_profile"),
+            "repository": payload.get("repository"),
+            "raw_content": content if isinstance(content, str) else repr(content),
+        })
         try:
             data = json.loads(content)
         except (ValueError, TypeError):
@@ -163,9 +171,23 @@ def generate_profile_artifacts(
         raise ValueError("At least one analysis artifact is required")
     analyses = [load_analysis(path) for path in inputs]
     observed = TracingProfileModel(model)
-    profile = build_profile_from_analyses(
-        analyses, candidate=candidate, model=observed, max_skills=max_skills
-    )
+    try:
+        profile = build_profile_from_analyses(
+            analyses, candidate=candidate, model=observed, max_skills=max_skills
+        )
+    except ValueError as exc:
+        # A malformed Qwen JSON response previously surfaced as an opaque
+        # "invalid JSON/schema" message. Keep the real text for debugging.
+        output_dir.mkdir(parents=True, exist_ok=True)
+        debug_file = output_dir / "llm_profile_error.json"
+        debug_file.write_text(
+            json.dumps({
+                "error": str(exc),
+                "responses": observed.raw_responses,
+            }, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        raise ValueError(f"{exc}; model output saved to {debug_file}") from exc
     preview = render_profile_preview(profile, analyses)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "candidate_profile.json").write_text(
@@ -193,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="qwen-coder")
     parser.add_argument("--max-skills", type=int, default=20)
     parser.add_argument("--temperature", type=float, default=0.1)
+    parser.add_argument("--max-output-tokens", type=int, default=1800)
     parser.add_argument("--output", type=Path, default=Path("results/profile_demo"))
     parser.add_argument("--allow-remote-model", action="store_true")
     args = parser.parse_args(argv)
@@ -205,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             api_key=os.environ.get("LLM_API_KEY", "not-needed"),
             allow_remote=args.allow_remote_model,
             temperature=args.temperature,
+            max_tokens=args.max_output_tokens,
         )
         profile = generate_profile_artifacts(
             args.analysis, candidate=identity, model=model,

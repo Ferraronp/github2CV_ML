@@ -51,8 +51,10 @@ def test_plan_covers_distinct_candidate_roles_before_extra_files():
     assert len(result) == 7
     assert [entry["candidate_role"] for entry in result] == [
         "pipeline", "retrieval", "generation", "infrastructure",
-        "entrypoint", "core", "evaluation",
+        "entrypoint", "core", "core",
     ]
+    # With only seven reads, both implementation helpers outrank tests.
+    assert "evaluation/evaluate_retrieval.py" not in {x["path"] for x in result}
     assert result[0]["path"] == "src/ovp_rag/pipeline.py"
     assert build_exploration_plan(paths, limit=7) == result
     assert build_exploration_plan([], limit=7) == []
@@ -719,3 +721,91 @@ def test_union_dedup_does_not_reject_an_actual_one_line_gap():
     assert model.extract_calls == 3
     assert len(result.file_summaries) == 3
     assert all(item["status"] == "ok" for item in result.tool_trace)
+
+
+def test_large_repository_plans_twelve_source_files_before_test_fixtures():
+    """Regression: four files and test-only evidence underrepresented github2CV_ML."""
+    paths = [
+        "src/github2cv_ml/agent/runner.py",
+        "src/github2cv_ml/profile_builder.py",
+        "src/github2cv_ml/cv_writer.py",
+        "src/github2cv_ml/agent/cli.py",
+        "src/github2cv_ml/domain/repository.py",
+        *(f"src/github2cv_ml/domain/core_{i:02d}.py" for i in range(14)),
+        *(f"tests/test_benchmark_{i:02d}.py" for i in range(15)),
+    ]
+    plan = build_exploration_plan(paths, limit=12)
+    assert len(plan) == 12
+    assert all(item["path"].startswith("src/") for item in plan)
+    assert any(item["path"].endswith("runner.py") for item in plan)
+    assert any(item["path"].endswith("profile_builder.py") for item in plan)
+    assert any(item["path"].endswith("cv_writer.py") for item in plan)
+    assert all(item["candidate_role"] != "evaluation" for item in plan)
+    assert build_exploration_plan(reversed(paths), limit=12) == plan
+
+
+def test_extended_budget_exposes_twelve_planned_files_to_explorer():
+    paths = [f"src/feature_{i:02d}.py" for i in range(25)]
+    browser = RepositoryBrowser(FakeClient(), snapshot(paths), SHA)
+    result = RepoAnalyzer(
+        SequenceModel([("finish_analysis", {})]), browser,
+        max_steps=28, max_read_calls=12,
+    ).run()
+    assert len(result.exploration_plan) == 12
+    assert result.coverage["planned_files"] == 12
+    assert result.status == "completed"  # default min_planned_reads=0 preserves behavior
+
+
+def test_premature_finish_is_deferred_until_distinct_modules_are_read():
+    browser = RepositoryBrowser(
+        FakeClient(), snapshot([
+            "src/pipeline.py", "src/retrieval.py", "src/generation.py",
+        ]), SHA,
+    )
+    model = SequenceModel([
+        ("finish_analysis", {}),  # insufficient coverage: read via recovery
+        ("finish_analysis", {}),  # still short: read another planned module
+        ("finish_analysis", {}),  # now two distinct modules: finish allowed
+    ])
+    result = RepoAnalyzer(
+        model, browser,
+        max_steps=9, max_read_calls=3, min_planned_reads=2,
+    ).run()
+    assert result.status == "completed"
+    assert result.coverage["minimum_planned_files"] == 2
+    assert result.coverage["planned_files_read"] == 2
+    assert result.coverage["source_files_with_evidence"] == 2
+    assert [call["status"] for call in result.tool_trace] == [
+        "deferred", "ok", "deferred", "ok", "ok",
+    ]
+    assert [action["origin"] for action in result.tool_trace if "origin" in action] == [
+        "automatic_recovery", "automatic_recovery",
+    ]
+    assert [action["recovery_reason"] for action in result.tool_trace if "origin" in action] == [
+        "coverage_floor", "coverage_floor",
+    ]
+
+
+def test_floor_is_bounded_by_actual_plan_length():
+    browser = RepositoryBrowser(FakeClient(), snapshot(["src/main.py"]), SHA)
+    model = SequenceModel([
+        ("finish_analysis", {}),
+        ("finish_analysis", {}),
+    ])
+    result = RepoAnalyzer(
+        model, browser, max_steps=5,
+        max_read_calls=8, min_planned_reads=6,
+    ).run()
+    assert result.coverage["minimum_planned_files"] == 1
+    assert result.coverage["planned_files_read"] == 1
+    assert result.status == "completed"
+
+
+@pytest.mark.parametrize("floor", [-1, 5, 1.5, True])
+def test_min_planned_reads_rejects_invalid_floor(floor):
+    browser = RepositoryBrowser(FakeClient(), snapshot(["src/main.py"]), SHA)
+    with pytest.raises(ValueError, match="min_planned_reads"):
+        RepoAnalyzer(
+            SequenceModel([]), browser, max_read_calls=4,
+            min_planned_reads=floor,
+        )

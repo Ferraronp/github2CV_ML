@@ -120,6 +120,7 @@ class LocalOpenAIModel:
         timeout: float = 180.0,
         allow_remote: bool = False,
         temperature: float = 0.1,
+        max_tokens: int = 900,
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -137,6 +138,10 @@ class LocalOpenAIModel:
         self.api_key = api_key
         self.timeout = timeout
         self.temperature = float(temperature)
+        if (isinstance(max_tokens, bool) or not isinstance(max_tokens, int)
+                or not 128 <= max_tokens <= 8192):
+            raise ValueError("max_tokens must be an integer between 128 and 8192")
+        self.max_tokens = max_tokens
 
     def complete(
         self,
@@ -149,7 +154,7 @@ class LocalOpenAIModel:
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": 900,
+            "max_tokens": self.max_tokens,
             "stream": False,
         }
         if tools is not None:
@@ -214,13 +219,19 @@ class RepoAnalyzer:
         *,
         max_steps: int = 12,
         max_read_calls: int = 6,
+        min_planned_reads: int = 0,
     ) -> None:
         if max_steps < 1 or max_read_calls < 1:
             raise ValueError("Budgets must be positive")
+        if isinstance(min_planned_reads, bool) or not isinstance(min_planned_reads, int):
+            raise ValueError("min_planned_reads must be a nonnegative integer")
+        if min_planned_reads < 0 or min_planned_reads > max_read_calls:
+            raise ValueError("min_planned_reads must be between 0 and max_read_calls")
         self.model = model
         self.browser = browser
         self.max_steps = max_steps
         self.max_read_calls = max_read_calls
+        self.min_planned_reads = min_planned_reads
 
     def _extract_file(self, fragment: dict[str, Any]) -> tuple[str, list[RepoEvidence], int]:
         repo = self.browser.snapshot.repository
@@ -332,8 +343,9 @@ class RepoAnalyzer:
         warnings: list[str] = []
         read_calls = 0
         exploration_plan = build_exploration_plan(
-            browser.source_paths(), limit=min(7, self.max_read_calls)
+            browser.source_paths(), limit=min(12, self.max_read_calls)
         )
+        minimum_planned = min(self.min_planned_reads, len(exploration_plan))
         visited_files: set[str] = set()
         analyzed_ranges: dict[str, list[tuple[int, int]]] = {}
         successful_calls: set[tuple[str, str]] = set()
@@ -343,6 +355,7 @@ class RepoAnalyzer:
         total_tool_errors = 0
         no_progress_steps = 0
         force_recovery = False
+        deferred_finish = False
         status = "budget_exhausted"
 
         for step in range(self.max_steps):
@@ -384,6 +397,7 @@ class RepoAnalyzer:
             # Also recover when valid navigation repeatedly produces no new
             # source evidence: different searches can otherwise loop forever.
             recovery_reason = (
+                "coverage_floor" if deferred_finish else
                 "duplicate_source" if force_recovery else
                 "tool_errors" if consecutive_tool_errors >= 3 else
                 "no_source_progress" if no_progress_steps >= 3 else None
@@ -493,6 +507,7 @@ class RepoAnalyzer:
                         )
                     break
                 force_recovery = False
+                deferred_finish = False
                 consecutive_tool_errors = 0
                 reply = {"tool_calls": [{"function": {
                     "name": "read_file",
@@ -563,6 +578,23 @@ class RepoAnalyzer:
                 if not isinstance(args, dict):
                     raise ValueError("Tool arguments must be a JSON object")
                 if name == "finish_analysis":
+                    covered_now = sum(
+                        item["path"] in visited_files for item in exploration_plan
+                    )
+                    if covered_now < minimum_planned:
+                        # User opted into breadth-first inspection. A premature
+                        # LLM finish must not skip still-unread implementation.
+                        force_recovery = True
+                        deferred_finish = True
+                        trace.append({
+                            "step": step + 1,
+                            "tool": name,
+                            "status": "deferred",
+                            "reason": "minimum_planned_reads",
+                            "visited_planned_files": covered_now,
+                            "required_planned_files": minimum_planned,
+                        })
+                        continue
                     status = "completed"
                     trace.append({"step": step + 1, "tool": name, "status": "ok"})
                     break
@@ -673,6 +705,10 @@ class RepoAnalyzer:
             "eligible_source_files": len(browser.source_paths()),
             "planned_files": len(selected_paths),
             "planned_files_read": len(covered),
+            "minimum_planned_files": minimum_planned,
+            "source_files_with_evidence": len({
+                item.source.path for item in evidence.values() if item.source.path
+            }),
             "visited_files": sorted(visited_files),
             "unvisited_planned_files": not_covered,
             "planned_coverage_ratio": (
@@ -683,6 +719,11 @@ class RepoAnalyzer:
             warnings.append(
                 f"Only {len(covered)}/{len(selected_paths)} planned source files inspected; "
                 "project-wide coverage is unknown"
+            )
+        if minimum_planned and len(covered) < minimum_planned:
+            warnings.append(
+                f"Minimum planned file coverage not met ({len(covered)}/{minimum_planned}); "
+                "resume generation should treat this analysis as partial"
             )
         summary, project_type = self._final_summary(list(evidence.values()))
         if not evidence:
