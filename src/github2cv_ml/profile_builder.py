@@ -45,8 +45,21 @@ supported by provided observations. Use familiar canonical names where possible.
 Avoid speculative skill synonyms, generic adjectives and trivial concepts.
 Return 0-12 high-value unique skills; no need to fill a quota.
 Project paragraph: write 2-4 short natural sentences IN RUSSIAN, as a
-coherent paragraph (not bullet points), only about the implementation.
+coherent, recruiter-friendly portfolio paragraph (not bullet points).
+Present the project clearly: what it is for (only if supported), which
+meaningful implementation mechanisms are evidenced, and how the supported
+components work together. Lead with the project's purpose or key behavior
+rather than a dry list of library imports. Prefer strong, concrete verbs
+such as "реализует", "обрабатывает", "связывает" when the OBSERVATIONS
+directly support them. Prefer concise readable engineering language to
+"в коде найдено", generic descriptions, repetitive "используется", or
+an exhaustive technology dump. Be engaging through specificity, not hype.
 Keep common technical skill tags in their conventional names (e.g. FastAPI).
+Do not assert "высокопроизводительный", "масштабируемый", "оптимизированный",
+"production-ready", time savings or improved accuracy without direct evidence.
+Do not imply a framework, library or model serves a different technical role.
+When evidence covers only a small part of a project, describe only that
+part; do not guess the architecture or falsely portray it as the entire repo.
 Do not infer candidate authorship, employment, project impact, performance,
 deployment, or contributions unless evidence and candidate context prove it.
 Use only exact evidence_ids from the input. Every skill and the project paragraph
