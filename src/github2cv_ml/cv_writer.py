@@ -102,32 +102,31 @@ def _resolve_item(
     return ResumeItem(text=proposed.text, claim_ids=ids)
 
 
-def _check_mentioned_skills(
+def _complete_mentioned_skills(
     item: ResumeItem,
     skills: list[CandidateClaim],
     *,
     component: str,
-) -> None:
-    """Require provenance for each explicitly named profile skill.
+) -> ResumeItem:
+    """Restore omitted provenance for skill tags that already exist in the profile.
 
-    Skill names are drawn from the CandidateProfile, not from a hardcoded
-    technology vocabulary. This is a *structural* check, not a semantic
-    verifier: it cannot detect invented architectural roles or unnamed skills.
+    The writer may forget IDs when naming many technologies. Recover only
+    exact, word-bounded names of *existing* CandidateProfile skill claims.
+    This does not license new skills, verify architecture or prove authorship.
     """
-    text = item.text.casefold()
-    citations = set(item.claim_ids)
-    unlinked = [
-        skill.text
+    mentioned_ids = [
+        skill.id
         for skill in skills
-        if skill.id not in citations and re.search(
-            rf"(?<!\w){re.escape(skill.text.casefold())}(?!\w)", text
+        if re.search(
+            rf"(?<!\w){re.escape(skill.text.casefold())}(?!\w)",
+            item.text.casefold(),
         )
     ]
-    if unlinked:
-        raise ValueError(
-            f"{component} mentions skills without their claim_ids: "
-            + ", ".join(unlinked)
-        )
+    ids = [*item.claim_ids]
+    ids.extend(identifier for identifier in mentioned_ids if identifier not in ids)
+    if len(ids) > 24:
+        raise ValueError(f"{component} exceeds 24 source claim references")
+    return ResumeItem(text=item.text, claim_ids=ids)
 
 
 def _section(title: str, claims: list[CandidateClaim]) -> ResumeSection | None:
@@ -222,9 +221,9 @@ def write_resume(
         _resolve_item(proposed.headline, available_ids, component="headline")
         if proposed.headline is not None else None
     )
-    _check_mentioned_skills(summary, skills, component="summary")
+    summary = _complete_mentioned_skills(summary, skills, component="summary")
     if headline is not None:
-        _check_mentioned_skills(headline, skills, component="headline")
+        headline = _complete_mentioned_skills(headline, skills, component="headline")
     return ResumeDocument(
         candidate_name=name,
         headline=headline,
