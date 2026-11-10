@@ -118,6 +118,9 @@ def test_colab_runs_real_profile_builder_and_displays_its_model_proposals():
     assert '"--temperature", str(MODEL_TEMPERATURE)' in source
     assert "CACHED_ANALYSIS_FILES" in source
     assert '"-m", "github2cv_ml.profile_demo"' in source
+    assert '"--max-output-tokens", "1800"' in source
+    assert '"llm_profile_error.json"' in source
+    assert 'debug["responses"][-2:]' in source
     assert 'profile_inputs = [*analysis_files, *(Path(p) for p in CACHED_ANALYSIS_FILES)]' in source
     assert 'profile_cmd.extend(["--analysis", str(input_artifact)])' in source
     assert '"--base-url", SERVER_BASE_URL' in source
