@@ -267,14 +267,14 @@ def _propose(
             # An invalid JSON object must never be silently accepted or have
             # citations guessed. Retry once with a concise formatting reminder.
             messages = [
-                {"role": "system", "content": PROFILE_PROMPT},
-                {"role": "user", "content": payload},
-                {"role": "user", "content": (
-                    "The previous response did not satisfy the required JSON schema. "
-                    "Generate a NEW complete JSON object with skills (list of name and "
-                    "evidence_ids) and project (paragraph and evidence_ids). Use only "
-                    "source IDs from the input. No markdown, no explanation."
+                {"role": "system", "content": PROFILE_PROMPT + (
+                    "\\nIMPORTANT RETRY: Previous response was not valid JSON for "
+                    "the required schema. Output a NEW complete JSON object with "
+                    "skills (name and evidence_ids) and project (paragraph and "
+                    "evidence_ids). Cite only IDs supplied in the user data. "
+                    "No markdown or explanation."
                 )},
+                {"role": "user", "content": payload},
             ]
     raise AssertionError("Unreachable profile proposal attempt")
 
