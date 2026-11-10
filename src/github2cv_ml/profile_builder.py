@@ -242,23 +242,41 @@ def _propose(
             f"Evidence context for {repository} exceeds {max_input_chars} characters; "
             "split or summarize inputs before profile synthesis"
         )
-    response = model.complete(
-        [
-            {"role": "system", "content": PROFILE_PROMPT},
-            {"role": "user", "content": payload},
-        ],
-        json_mode=True,
-    )
-    if not isinstance(response, dict):
-        raise ValueError(f"Profile model returned malformed response for {repository}")
-    raw = response.get("content")
-    if not isinstance(raw, str):
-        raise ValueError(f"Profile model omitted JSON content for {repository}")
-    try:
-        parsed = json.loads(raw)
-        return RepositoryProposal.model_validate(parsed)
-    except (ValueError, TypeError, ValidationError) as exc:
-        raise ValueError(f"Profile model returned invalid JSON/schema for {repository}") from exc
+    messages = [
+        {"role": "system", "content": PROFILE_PROMPT},
+        {"role": "user", "content": payload},
+    ]
+    for attempt in range(2):
+        response = model.complete(messages, json_mode=True)
+        if not isinstance(response, dict):
+            raise ValueError(f"Profile model returned malformed response for {repository}")
+        raw = response.get("content")
+        if not isinstance(raw, str):
+            raise ValueError(f"Profile model omitted JSON content for {repository}")
+        try:
+            parsed = json.loads(raw)
+            return RepositoryProposal.model_validate(parsed)
+        except (ValueError, TypeError, ValidationError) as exc:
+            if attempt:
+                # Preserve the original validation details in the exception
+                # chain; the demo CLI also writes raw model output for debugging.
+                raise ValueError(
+                    f"Profile model returned invalid JSON/schema for {repository}: "
+                    f"{str(exc)[:250]}"
+                ) from exc
+            # An invalid JSON object must never be silently accepted or have
+            # citations guessed. Retry once with a concise formatting reminder.
+            messages = [
+                {"role": "system", "content": PROFILE_PROMPT},
+                {"role": "user", "content": payload},
+                {"role": "user", "content": (
+                    "The previous response did not satisfy the required JSON schema. "
+                    "Generate a NEW complete JSON object with skills (list of name and "
+                    "evidence_ids) and project (paragraph and evidence_ids). Use only "
+                    "source IDs from the input. No markdown, no explanation."
+                )},
+            ]
+    raise AssertionError("Unreachable profile proposal attempt")
 
 
 def _reconcile_skill_names(
