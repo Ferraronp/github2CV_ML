@@ -154,7 +154,13 @@ def test_demo_never_writes_partial_outputs_on_model_failure(tmp_path):
             [path], candidate=CandidateIdentity(github_login="developer"),
             model=BrokenModel(), output_dir=output,
         )
-    assert not output.exists()
+    # No misleading success artifacts; raw Qwen responses are kept for diagnosis.
+    assert not (output / "candidate_profile.json").exists()
+    debug = json.loads((output / "llm_profile_error.json").read_text("utf-8"))
+    assert "invalid JSON/schema" in debug["error"]
+    assert len(debug["responses"]) == 2
+    assert all(r["repository"] == "example/api" for r in debug["responses"])
+    assert debug["responses"][0]["raw_content"] == '{"skills": []}'
 
 
 def test_demo_requires_input_and_keeps_external_urls_as_plain_text(tmp_path):
@@ -172,3 +178,41 @@ def test_demo_requires_input_and_keeps_external_urls_as_plain_text(tmp_path):
     )
     preview = render_profile_preview(profile, [analysis])
     assert "[src/main.py](https://github.com/example/api/" in preview
+
+
+
+def test_profile_demo_recovers_from_invalid_first_model_json(tmp_path):
+    api = _analysis("api", "e1", "FastAPI service")
+    source = tmp_path / "analysis.json"
+    source.write_text(api.model_dump_json(), encoding="utf-8")
+
+    class RecoveringModel:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, messages, *, tools=None, json_mode=False):
+            self.calls.append(messages)
+            assert json_mode
+            if len(self.calls) == 1:
+                return {"content": '{"skills": [}'}  # Malformed first reply.
+            return {"content": json.dumps({
+                "skills": [{"name": "FastAPI", "evidence_ids": ["e1"]}],
+                "project": {
+                    "paragraph": "В репозитории есть API на FastAPI.",
+                    "evidence_ids": ["e1"],
+                },
+            }, ensure_ascii=False)}
+
+    model = RecoveringModel()
+    dest = tmp_path / "result"
+    result = generate_profile_artifacts(
+        [source], candidate=CandidateIdentity(github_login="example"),
+        model=model, output_dir=dest,
+    )
+    assert len(model.calls) == 2
+    assert "IMPORTANT RETRY" in model.calls[-1][0]["content"]
+    assert json.loads(model.calls[0][-1]["content"])["repository"] == "example/api"
+    assert json.loads(model.calls[1][-1]["content"])["repository"] == "example/api"
+    assert any(c.text == "FastAPI" for c in result.claims)
+    assert (dest / "candidate_profile.json").is_file()
+    assert not (dest / "llm_profile_error.json").exists()
