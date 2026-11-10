@@ -120,7 +120,7 @@ def _check_mentioned_skills(
         skill.text
         for skill in skills
         if skill.id not in citations and re.search(
-            rf"(?<!\\w){re.escape(skill.text.casefold())}(?!\\w)", text
+            rf"(?<!\w){re.escape(skill.text.casefold())}(?!\w)", text
         )
     ]
     if unlinked:
