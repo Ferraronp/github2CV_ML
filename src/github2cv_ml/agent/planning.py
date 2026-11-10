@@ -26,7 +26,7 @@ def _role_for(path: str) -> str:
         or name.startswith("test_") or "benchmark" in name or name.startswith("eval_")
     ):
         return "evaluation"
-    if any(token in name for token in ("pipeline", "workflow", "orchestrat", "engine")):
+    if any(token in name for token in ("pipeline", "workflow", "orchestrat", "engine", "runner", "profile_builder")):
         return "pipeline"
     if any(token in name for token in ("retriev", "rerank", "search", "vector", "embed")):
         return "retrieval"
@@ -109,9 +109,16 @@ def build_exploration_plan(paths: list[str], limit: int = 7) -> list[dict[str, s
             if len(selected) >= limit:
                 break
 
-    # Migration files, tests and core utilities are useful but should not
-    # displace substantive implementations when the budget is tight.
-    while len(selected) < limit and any(buckets[role] for role in SECONDARY_ROLES):
-        for role in SECONDARY_ROLES:
+    # Core modules often contain the actual business/ML logic. Exhaust those
+    # before spending scarce reads on benchmark fixtures, tests or migrations.
+    # This matters in large projects where test names sort ahead of code.
+    while len(selected) < limit and buckets["core"]:
+        take_one("core")
+
+    # Tests and migrations provide useful evidence *after* source code.
+    while len(selected) < limit and any(
+        buckets[role] for role in ("evaluation", "migration")
+    ):
+        for role in ("evaluation", "migration"):
             take_one(role)
     return selected
