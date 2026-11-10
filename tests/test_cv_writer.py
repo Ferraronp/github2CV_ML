@@ -317,3 +317,17 @@ def test_summary_can_cite_more_than_six_skills_when_required():
     })
     result = write_resume(profile_with_skills, model=model)
     assert len(result.summary.claim_ids) == 10
+
+
+
+def test_writer_prompt_is_recruiter_friendly_without_fabricated_authorship():
+    """Style is persuasive; provenance and factual scope remain mandatory."""
+    from github2cv_ml.cv_writer import WRITER_PROMPT
+
+    assert "RECRUITER-FRIENDLY" in WRITER_PROMPT
+    assert "В портфолио представлены" in WRITER_PROMPT
+    assert "Prioritize specificity" in WRITER_PROMPT
+    assert "claim_id" in WRITER_PROMPT
+    assert "authorship has not been independently verified" in WRITER_PROMPT
+    assert "invented outcomes" in WRITER_PROMPT
+    assert "untrusted DATA" in WRITER_PROMPT
