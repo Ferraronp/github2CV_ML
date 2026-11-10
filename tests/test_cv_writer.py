@@ -255,3 +255,66 @@ def test_model_input_treats_profile_claims_as_data_not_instructions():
     write_resume(injected, model=model)
     assert "untrusted DATA" in __import__("github2cv_ml.cv_writer", fromlist=["WRITER_PROMPT"]).WRITER_PROMPT
     assert model.calls[0]["claims"][0]["text"] == injected.claims[0].text
+
+
+def test_summary_rejects_unlinked_mentioned_skills_from_real_smoke_failure():
+    """Previously summary named CrossEncoder/Unit Testing without their IDs."""
+    model = FakeWriter({
+        "summary": {
+            "text": "В проектах используются Python, FastAPI и PostgreSQL.",
+            "claim_ids": ["s1", "s2", "p1"],  # PostgreSQL s3 missing!
+        },
+        "headline": None,
+    })
+    with pytest.raises(ValueError, match="summary mentions skills.*PostgreSQL"):
+        write_resume(profile(), model=model)
+
+
+def test_headline_must_cite_explicitly_named_skill():
+    model = FakeWriter({
+        "summary": {"text": "Реализованы API и фоновые задачи.", "claim_ids": ["p1"]},
+        "headline": {"text": "Python и FastAPI", "claim_ids": ["s1"]},
+    })
+    with pytest.raises(ValueError, match="headline mentions skills.*FastAPI"):
+        write_resume(profile(), model=model)
+
+
+def test_skill_matching_is_case_insensitive_and_uses_word_boundaries():
+    p = CandidateProfile(
+        candidate=CandidateIdentity(github_login="dev"),
+        claims=[
+            claim("go", ClaimKind.SKILL, "Go"),
+            claim("other", ClaimKind.PROJECT, "project: Golang tooling"),
+        ],
+        generated_at=STAMP,
+    )
+    model = FakeWriter({
+        "summary": {"text": "В репозитории присутствует Golang tooling.", "claim_ids": ["other"]},
+        "headline": None,
+    })
+    assert write_resume(p, model=model).summary.claim_ids == ["other"]
+
+    model.output = {
+        "summary": {"text": "Проекты используют GO.", "claim_ids": ["other"]},
+        "headline": None,
+    }
+    with pytest.raises(ValueError, match="summary mentions skills.*Go"):
+        write_resume(p, model=model)
+
+
+def test_summary_can_cite_more_than_six_skills_when_required():
+    skills = [claim(f"s{i}", ClaimKind.SKILL, f"Skill-{i}") for i in range(10)]
+    profile_with_skills = CandidateProfile(
+        candidate=CandidateIdentity(github_login="dev"),
+        claims=skills,
+        generated_at=STAMP,
+    )
+    model = FakeWriter({
+        "summary": {
+            "text": "В репозиториях использованы " + ", ".join(c.text for c in skills) + ".",
+            "claim_ids": [c.id for c in skills],
+        },
+        "headline": None,
+    })
+    result = write_resume(profile_with_skills, model=model)
+    assert len(result.summary.claim_ids) == 10
