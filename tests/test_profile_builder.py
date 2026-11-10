@@ -613,7 +613,7 @@ def test_profile_prompt_prioritizes_engaging_specificity_not_marketing_hype():
 
     assert "recruiter-friendly portfolio paragraph" in PROFILE_PROMPT
     assert "реализует" in PROFILE_PROMPT
-    assert "high" not in PROFILE_PROMPT.lower().split("project paragraph:")[0]
+    assert "production-ready" in PROFILE_PROMPT
     assert "direct evidence" in PROFILE_PROMPT
     assert "do not guess the architecture" in PROFILE_PROMPT
     assert "Do not infer candidate authorship" in PROFILE_PROMPT
