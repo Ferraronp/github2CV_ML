@@ -9,6 +9,7 @@ professional roles, personal contributions or source references.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -32,10 +33,17 @@ You may optionally fill headline instead of null with an object:
 {"text": "short neutral technical focus", "claim_ids": ["existing claim id"]}
 
 Use ONLY directly supported facts from the supplied claims. Cite exact
-claim_ids that support each statement. Use 1-6 distinct claim_ids per field.
+claim_ids that support each statement. Use 1-24 distinct claim_ids per field. EVERY named skill appearing in the
+summary or headline must include its specific skill claim_id, even if a
+project claim also discusses it. Do not omit the references to skills you name.
 Never invent source ids, technology names, experience, years, positions, work
 history, education, achievements, metrics, team leadership or personal
-authorship of an entire repository. Do not turn project observations into
+authorship of an entire repository.
+Describe technologies as appearing IN THESE REPOSITORIES, not as proven
+personal employment experience or demonstrated seniority. Do not classify
+an embedding model/library as a vector database or imply unsupported
+architecture details. Avoid unsupported "I built", "candidate developed"
+or other personal-contribution phrasing. Do not turn project observations into
 claims that the person designed or delivered those components.
 The headline, if supplied, must be a technical focus (e.g. "API и базы данных"),
 not an unverified job title, seniority or employment status.
@@ -62,7 +70,7 @@ class WriterModel(Protocol):
 
 class ProposedResumeItem(ContractModel):
     text: str = Field(min_length=1, max_length=650)
-    claim_ids: list[NonEmptyId] = Field(min_length=1, max_length=6)
+    claim_ids: list[NonEmptyId] = Field(min_length=1, max_length=24)
 
     @field_validator("text")
     @classmethod
@@ -92,6 +100,34 @@ def _resolve_item(
     if any(identifier not in available_ids for identifier in ids):
         raise ValueError(f"Unknown CandidateProfile claim id in {component}")
     return ResumeItem(text=proposed.text, claim_ids=ids)
+
+
+def _check_mentioned_skills(
+    item: ResumeItem,
+    skills: list[CandidateClaim],
+    *,
+    component: str,
+) -> None:
+    """Require provenance for each explicitly named profile skill.
+
+    Skill names are drawn from the CandidateProfile, not from a hardcoded
+    technology vocabulary. This is a *structural* check, not a semantic
+    verifier: it cannot detect invented architectural roles or unnamed skills.
+    """
+    text = item.text.casefold()
+    citations = set(item.claim_ids)
+    unlinked = [
+        skill.text
+        for skill in skills
+        if skill.id not in citations and re.search(
+            rf"(?<!\\w){re.escape(skill.text.casefold())}(?!\\w)", text
+        )
+    ]
+    if unlinked:
+        raise ValueError(
+            f"{component} mentions skills without their claim_ids: "
+            + ", ".join(unlinked)
+        )
 
 
 def _section(title: str, claims: list[CandidateClaim]) -> ResumeSection | None:
@@ -181,13 +217,18 @@ def write_resume(
     except (ValueError, TypeError, ValidationError) as exc:
         raise ValueError("CV Writer returned invalid JSON/schema") from exc
     available_ids = {item.id for item in selected}
+    summary = _resolve_item(proposed.summary, available_ids, component="summary")
+    headline = (
+        _resolve_item(proposed.headline, available_ids, component="headline")
+        if proposed.headline is not None else None
+    )
+    _check_mentioned_skills(summary, skills, component="summary")
+    if headline is not None:
+        _check_mentioned_skills(headline, skills, component="headline")
     return ResumeDocument(
         candidate_name=name,
-        headline=(
-            _resolve_item(proposed.headline, available_ids, component="headline")
-            if proposed.headline is not None else None
-        ),
-        summary=_resolve_item(proposed.summary, available_ids, component="summary"),
+        headline=headline,
+        summary=summary,
         sections=sections,
         generated_at=datetime.now(timezone.utc),
     )
