@@ -187,7 +187,8 @@ def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
 
     monkeypatch.setattr(runner, "urlopen", fake_urlopen)
     model = LocalOpenAIModel(
-        base_url="http://127.0.0.1:8080/v1", model="qwen-coder", temperature=0.5
+        base_url="http://127.0.0.1:8080/v1", model="qwen-coder",
+        temperature=0.5, max_tokens=1800
     )
     prompt = [{"role": "user", "content": "inspect"}]
     response = model.complete(prompt, tools=[{"type": "function", "function": {
@@ -199,6 +200,7 @@ def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
     assert requests[0]["model"] == "qwen-coder"
     assert requests[0]["messages"] == prompt
     assert requests[0]["temperature"] == 0.5
+    assert requests[0]["max_tokens"] == 1800
 
 
 @pytest.mark.parametrize(
@@ -398,3 +400,10 @@ def test_source_implementation_ranked_before_evaluation_by_search():
 def test_http_adapter_rejects_invalid_temperature(temperature):
     with pytest.raises(ValueError, match="Temperature"):
         LocalOpenAIModel(temperature=temperature)
+
+
+
+@pytest.mark.parametrize("max_tokens", [0, 127, 8193, -1, 1.5, True, "1800"])
+def test_http_adapter_rejects_invalid_output_token_limit(max_tokens):
+    with pytest.raises(ValueError, match="max_tokens"):
+        LocalOpenAIModel(max_tokens=max_tokens)
