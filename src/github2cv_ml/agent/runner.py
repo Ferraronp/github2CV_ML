@@ -120,6 +120,7 @@ class LocalOpenAIModel:
         timeout: float = 180.0,
         allow_remote: bool = False,
         temperature: float = 0.1,
+        max_tokens: int = 900,
     ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -137,6 +138,10 @@ class LocalOpenAIModel:
         self.api_key = api_key
         self.timeout = timeout
         self.temperature = float(temperature)
+        if (isinstance(max_tokens, bool) or not isinstance(max_tokens, int)
+                or not 128 <= max_tokens <= 8192):
+            raise ValueError("max_tokens must be an integer between 128 and 8192")
+        self.max_tokens = max_tokens
 
     def complete(
         self,
@@ -149,7 +154,7 @@ class LocalOpenAIModel:
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": 900,
+            "max_tokens": self.max_tokens,
             "stream": False,
         }
         if tools is not None:
