@@ -202,3 +202,22 @@ def test_empty_profile_can_be_previewed_without_model_call(tmp_path):
     assert json.loads(
         (tmp_path / "output" / "cv_writer_trace.json").read_text("utf-8")
     ) == []
+
+
+def test_cv_trace_exposes_auto_recovered_skill_references(tmp_path):
+    source = tmp_path / "candidate_profile.json"
+    source.write_text(_profile().model_dump_json(), encoding="utf-8")
+    model = FakeModel({
+        "summary": {
+            "text": "В репозитории используются Python и FastAPI.",
+            "claim_ids": ["s1"],  # Model omitted reference for FastAPI.
+        },
+        "headline": None,
+    })
+    output = tmp_path / "output"
+    resume = generate_resume_artifacts(source, model=model, output_dir=output)
+    assert resume.summary.claim_ids == ["s1", "s2"]
+    trace = json.loads((output / "cv_writer_trace.json").read_text("utf-8"))
+    assert trace[0]["llm_proposed_overview"]["summary"]["claim_ids"] == ["s1"]
+    assert trace[0]["final_summary_claim_ids"] == ["s1", "s2"]
+    assert trace[0]["recovered_summary_claim_ids"] == ["s2"]
