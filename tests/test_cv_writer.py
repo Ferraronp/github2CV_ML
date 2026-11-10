@@ -257,26 +257,26 @@ def test_model_input_treats_profile_claims_as_data_not_instructions():
     assert model.calls[0]["claims"][0]["text"] == injected.claims[0].text
 
 
-def test_summary_rejects_unlinked_mentioned_skills_from_real_smoke_failure():
-    """Previously summary named CrossEncoder/Unit Testing without their IDs."""
+def test_summary_recovers_mentioned_skill_ids_from_real_smoke_failure():
+    """Forgotten IDs are restored for supported skills, without inventing new claims."""
     model = FakeWriter({
         "summary": {
             "text": "В проектах используются Python, FastAPI и PostgreSQL.",
-            "claim_ids": ["s1", "s2", "p1"],  # PostgreSQL s3 missing!
+            "claim_ids": ["s1", "s2", "p1"],  # PostgreSQL s3 is initially missing.
         },
         "headline": None,
     })
-    with pytest.raises(ValueError, match="summary mentions skills.*PostgreSQL"):
-        write_resume(profile(), model=model)
+    resume = write_resume(profile(), model=model)
+    assert resume.summary.claim_ids == ["s1", "s2", "p1", "s3"]
 
 
-def test_headline_must_cite_explicitly_named_skill():
+def test_headline_restores_explicitly_named_skill_claim():
     model = FakeWriter({
         "summary": {"text": "Реализованы API и фоновые задачи.", "claim_ids": ["p1"]},
         "headline": {"text": "Python и FastAPI", "claim_ids": ["s1"]},
     })
-    with pytest.raises(ValueError, match="headline mentions skills.*FastAPI"):
-        write_resume(profile(), model=model)
+    resume = write_resume(profile(), model=model)
+    assert resume.headline.claim_ids == ["s1", "s2"]
 
 
 def test_skill_matching_is_case_insensitive_and_uses_word_boundaries():
@@ -298,8 +298,7 @@ def test_skill_matching_is_case_insensitive_and_uses_word_boundaries():
         "summary": {"text": "Проекты используют GO.", "claim_ids": ["other"]},
         "headline": None,
     }
-    with pytest.raises(ValueError, match="summary mentions skills.*Go"):
-        write_resume(p, model=model)
+    assert write_resume(p, model=model).summary.claim_ids == ["other", "go"]
 
 
 def test_summary_can_cite_more_than_six_skills_when_required():
