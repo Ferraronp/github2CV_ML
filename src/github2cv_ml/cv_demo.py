@@ -141,6 +141,22 @@ def generate_resume_artifacts(
     # Atomic-at-application-level: no output files are written if the model,
     # validation, or rendering fails. Existing files are overwritten on success.
     preview = render_resume_preview(resume)
+    if tracing_model.calls:
+        # Compare raw LLM references with the validated/recovered references.
+        call = tracing_model.calls[-1]
+        raw = call.get("llm_proposed_overview")
+        raw = raw if isinstance(raw, dict) else {}
+        for key in ("summary", "headline"):
+            proposed = raw.get(key)
+            original_ids = proposed.get("claim_ids", []) if isinstance(proposed, dict) else []
+            resulting = getattr(resume, key)
+            if resulting is None:
+                continue
+            call[f"final_{key}_claim_ids"] = resulting.claim_ids
+            call[f"recovered_{key}_claim_ids"] = [
+                identifier for identifier in resulting.claim_ids
+                if identifier not in original_ids
+            ]
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "resume.json").write_text(
         resume.model_dump_json(indent=2) + "\n", encoding="utf-8"
