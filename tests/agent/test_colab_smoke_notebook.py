@@ -233,6 +233,12 @@ def test_colab_runs_each_repo_in_isolation_then_merges_analysis_artifacts():
     bundle = next(code for code in codes if 'bundle_path = WORKDIR / "github2cv_live_cv_demo.zip"' in code)
 
     assert 'REPOS = parse_target_repos(TARGET_REPOS)' in settings
+    assert 'MAX_STEPS = 28' in settings
+    assert 'MAX_READS = 12' in settings
+    assert 'MIN_PLANNED_READS = 8' in settings
+    assert 'assert 0 <= MIN_PLANNED_READS <= MAX_READS' in settings
+    assert '"--min-planned-reads", str(MIN_PLANNED_READS)' in analyzer
+    assert 'analysis.get("coverage", {}).get("source_files_with_evidence")' in "\\n".join(codes)
     assert 'for index, target_repo in enumerate(REPOS, start=1):' in analyzer
     assert 'RESULTS_ROOT / f"{index:02d}_{owner.casefold()}_{repo_name.casefold()}"' in analyzer
     assert '"github2cv_ml.agent", target_repo' in analyzer
