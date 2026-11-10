@@ -51,8 +51,10 @@ def test_plan_covers_distinct_candidate_roles_before_extra_files():
     assert len(result) == 7
     assert [entry["candidate_role"] for entry in result] == [
         "pipeline", "retrieval", "generation", "infrastructure",
-        "entrypoint", "core", "evaluation",
+        "entrypoint", "core", "core",
     ]
+    # With only seven reads, both implementation helpers outrank tests.
+    assert "evaluation/evaluate_retrieval.py" not in {x["path"] for x in result}
     assert result[0]["path"] == "src/ovp_rag/pipeline.py"
     assert build_exploration_plan(paths, limit=7) == result
     assert build_exploration_plan([], limit=7) == []
