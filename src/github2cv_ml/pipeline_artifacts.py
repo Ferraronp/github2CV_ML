@@ -61,12 +61,32 @@ def write_pipeline_artifacts(result: PipelineResult, output_dir: Path) -> dict[s
             "profile/llm_profile_trace.json",
             json.dumps(result.profile_trace, ensure_ascii=False, indent=2) + "\n",
         )
+    if result.profile_error_responses:
+        save(
+            "profile/llm_profile_error.json",
+            json.dumps({
+                "problems": [
+                    p.model_dump(mode="json") for p in result.problems
+                    if p.stage == "profile"
+                ],
+                "responses": result.profile_error_responses,
+            }, ensure_ascii=False, indent=2) + "\n",
+        )
     if result.cv_trace:
         save(
             "cv/cv_writer_trace.json",
             json.dumps(result.cv_trace, ensure_ascii=False, indent=2) + "\n",
         )
 
+    # Flat evidence-ID index makes provenance easy to resolve in the backend
+    # without repeating GitHub queries or searching nested analysis files.
+    save(
+        "provenance/evidence_index.json",
+        json.dumps({
+            identifier: evidence.model_dump(mode="json")
+            for identifier, evidence in sorted(result.evidence_index.items())
+        }, ensure_ascii=False, indent=2) + "\n",
+    )
     # Store the exact typed result and a lightweight lookup manifest, even if
     # the workflow failed at an earlier stage.
     save_model("pipeline_result.json", result)
