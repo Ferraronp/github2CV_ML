@@ -433,3 +433,136 @@ CV Writer и Candidate Profile Builder используют **позитивну
 структурная проверка `claim_ids` не заменяет семантическую проверку
 соответствия исходному коду (#29). Реальный GPU-прогон с новым стилем
 не выполнялся.
+
+
+## Единый MVP pipeline для интеграции с бэкендом (#8)
+
+**Уже реализованный vertical slice:** `GitHub repo(s) → RepoSnapshot →
+RepoEvidence → CandidateProfile → ResumeDocument`, вызывается одной командой
+или одним Python-вызовом. Промежуточные данные доступны для аудита.
+Этот слой **не поднимает HTTP-сервер** — бэкенд сам выбирает маршруты,
+очереди, авторизацию, persistence и фоновые задачи. Вызов синхронный:
+для пользовательского HTTP-запроса его лучше выполнять в отдельном worker,
+а не блокировать сервер на время чтения GitHub и инференса Qwen.
+
+### CLI: полный путь за одну команду
+
+При запущенном **локальном** OpenAI-совместимом `llama-server` (Qwen3.5):
+
+```bash
+python -m github2cv_ml.pipeline_cli \
+  --request examples/mvp_request.json \
+  --model qwen-3.5 --temperature 0.5 \
+  --output results/mvp
+```
+
+Альтернативно без файла запроса:
+
+```bash
+python -m github2cv_ml.pipeline_cli \
+  --github-login demo_developer \
+  --repo Ferraronp/military-charters-rag \
+  --repo Ferraronp/github2CV_ML \
+  --max-steps 28 --max-reads 12 --min-planned-reads 8 \
+  --output results/mvp
+```
+
+Для приватных репозиториев `GITHUB_TOKEN` берётся из переменной окружения;
+для незащищённого локального LLM-сервера никакой внешний API не нужен.
+Удалённый LLM endpoint запрещён по умолчанию, кроме явного
+`--allow-remote-model`. Репозиторный код **не исполняется**.
+Параллельный анализ и A2A остаются вне scope этой задачи (#11).
+
+Чтобы **не анализировать репозиторий заново**, можно передать несколько
+`--analysis ./path/analysis.json` или старых однорепозиторных smoke ZIP
+(при наличии хотя бы одного такого файла `--repo` необязателен).
+Одинаковый репозиторий нельзя передавать одновременно свежим и кэшированным:
+это явная ошибка, а не неявное смешение commit SHA.
+
+При успехе команда завершает работу с кодом **0**, если удалось
+построить `ResumeDocument` (даже если часть других репозиториев пропущена —
+статус будет `partial`). Код **2** означает отсутствие финального CV;
+при этом диагностические и частичные артефакты сохраняются.
+
+### Python API: для разработчика бэкенда
+
+```python
+from github2cv_ml.agent.runner import LocalOpenAIModel
+from github2cv_ml.collectors.github_client import GitHubApiClient
+from github2cv_ml.pipeline import PipelineRequest, run_pipeline
+from github2cv_ml.pipeline_artifacts import write_pipeline_artifacts
+
+# Валидированный запрос из JSON (без неявного доверия к лишним полям).
+request = PipelineRequest.model_validate({
+    "candidate": {"github_login": "demo_developer"},
+    "repositories": [
+        "Ferraronp/military-charters-rag",
+        "Ferraronp/github2CV_ML",
+    ],
+})
+
+result = run_pipeline(
+    request,
+    github_client=GitHubApiClient(token=github_token),
+    model=LocalOpenAIModel(
+        model="qwen-3.5",
+        temperature=0.5,
+        max_tokens=1800,
+    ),
+)
+if result.resume is not None:
+    resume_json = result.resume.model_dump_json()
+    # Передай ResumeDocument в бэкенд/UI и покажи кандидату на редактирование.
+source_by_id = result.evidence_index
+
+# Необязательно: сохранять артефакты в НОВУЮ пустую директорию.
+write_pipeline_artifacts(result, output_dir)
+```
+
+В примере `github_token` и `output_dir` задаются вызывающим приложением,
+а `result` — типизированный `PipelineResult` с полями:
+
+| Поле | Назначение |
+| --- | --- |
+| `status` | `completed`, `partial` или `failed` |
+| `snapshots` | Зафиксированные метаданные и дерево файлов GitHub |
+| `analyses` | Полные `RepoAnalysis`, их evidence, trace и pinned commit SHA |
+| `profile` | `CandidateProfile` с `CandidateClaim.evidence_ids` |
+| `resume` | `ResumeDocument`, каждый `ResumeItem.claim_ids` указывает на claims |
+| `problems` | `stage` + `code` + `repository` + `message` |
+| `warnings` | В частности, частичный анализ `read_budget_exhausted` |
+| `profile_trace`, `cv_trace` | Метаданные реальных вызовов модели |
+
+Бэкенд может проследить provenance:
+`ResumeItem.claim_ids → CandidateClaim.evidence_ids → RepoEvidence.source`
+(`result.evidence_index`). Это проверка происхождения утверждения,
+**не доказательство личного вклада и не семантическая верификация**.
+Полнота анализа ограничена бюджетом, поэтому отсутствие извлечённого
+навыка нельзя интерпретировать как его отсутствие у кандидата.
+
+### Сохранённые артефакты и ошибки
+
+`write_pipeline_artifacts` записывает:
+
+- `pipeline_result.json` — весь результат, включая ошибки и промежуточные контракты;
+- `pipeline_manifest.json` — статус, проблемы, метрики, список файлов;
+- `snapshots/*.json` — по одному `RepoSnapshot`;
+- `analyses/NN_owner_repo/analysis.json` и `report.md`;
+- `profile/candidate_profile.json`, `profile_preview.md`, LLM trace — если профиль получен;
+- `cv/resume.json`, `resume_preview.md`, LLM trace — если CV получено.
+
+Результат каждого репозитория обрабатывается независимо. Ошибка GitHub
+(`collect`) или Repo Analyzer (`analyze`) не уничтожает evidence других
+репозиториев. Ошибка Profile Builder (`profile`) оставляет предыдущие
+анализы; ошибка Writer (`resume`) дополнительно сохраняет профиль.
+При полном отсутствии evidence резюме **не создаётся**, статус `failed`.
+Частичные результаты помечаются `partial`. Сохранение в непустой каталог
+запрещено, чтобы старый `resume.json` не выдавался за результат нового
+неудачного запуска. Эти файлы могут содержать сведения об исходниках —
+обращайтесь с ними как с чувствительными артефактами.
+
+**Reproducible smoke:** `tests/test_pipeline.py` запускает настоящие
+Collector → RepoAnalyzer → Profile Builder → CV Writer на двух фиктивных
+репозиториях, подменяя только HTTP GitHub и LLM. Живой запуск на GPU
+и проверка достоверности технических утверждений модели остаются отдельными
+проверками.
