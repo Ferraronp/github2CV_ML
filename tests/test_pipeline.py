@@ -5,7 +5,6 @@ CV Writer, with only GitHub HTTP and the language model replaced by fakes.
 """
 
 import json
-from datetime import datetime, timezone
 
 import pytest
 
