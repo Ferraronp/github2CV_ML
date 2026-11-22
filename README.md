@@ -487,10 +487,16 @@ python -m github2cv_ml.pipeline_cli \
 ### Python API: для разработчика бэкенда
 
 ```python
+import os
+from pathlib import Path
+
 from github2cv_ml.agent.runner import LocalOpenAIModel
 from github2cv_ml.collectors.github_client import GitHubApiClient
 from github2cv_ml.pipeline import PipelineRequest, run_pipeline
 from github2cv_ml.pipeline_artifacts import write_pipeline_artifacts
+
+github_token = os.environ.get("GITHUB_TOKEN")
+output_dir = Path("results/backend-demo")
 
 # Валидированный запрос из JSON (без неявного доверия к лишним полям).
 request = PipelineRequest.model_validate({
@@ -519,7 +525,7 @@ source_by_id = result.evidence_index
 write_pipeline_artifacts(result, output_dir)
 ```
 
-В примере `github_token` и `output_dir` задаются вызывающим приложением,
+В реальном бэкенде `github_token` и `output_dir` задаёт приложение,
 а `result` — типизированный `PipelineResult` с полями:
 
 | Поле | Назначение |
@@ -546,9 +552,13 @@ write_pipeline_artifacts(result, output_dir)
 
 - `pipeline_result.json` — весь результат, включая ошибки и промежуточные контракты;
 - `pipeline_manifest.json` — статус, проблемы, метрики, список файлов;
+- `provenance/evidence_index.json` — индекс всех `RepoEvidence` по ID
+  (быстрый lookup для бэкенда);
 - `snapshots/*.json` — по одному `RepoSnapshot`;
 - `analyses/NN_owner_repo/analysis.json` и `report.md`;
 - `profile/candidate_profile.json`, `profile_preview.md`, LLM trace — если профиль получен;
+  если профиль не прошёл JSON/schema-валидацию, сохраняется
+  `profile/llm_profile_error.json` с ограниченными сырыми ответами модели;
 - `cv/resume.json`, `resume_preview.md`, LLM trace — если CV получено.
 
 Результат каждого репозитория обрабатывается независимо. Ошибка GitHub
