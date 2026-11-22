@@ -1,0 +1,14 @@
+{
+  "candidate": {
+    "github_login": "demo_developer",
+    "display_name": "Demo Developer"
+  },
+  "repositories": [
+    "Ferraronp/military-charters-rag",
+    "Ferraronp/github2CV_ML"
+  ],
+  "max_steps": 28,
+  "max_reads": 12,
+  "min_planned_reads": 8,
+  "max_skills": 20
+}
