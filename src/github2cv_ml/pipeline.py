@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from pydantic import Field, model_validator
 
@@ -86,7 +86,7 @@ class PipelineProblem(ContractModel):
 class PipelineResult(ContractModel):
     """One complete, partially complete or failed pipeline attempt."""
 
-    schema_version: str = "1.0"
+    schema_version: Literal["1.0"] = "1.0"
     status: PipelineStatus
     request: PipelineRequest
     snapshots: list[RepoSnapshot] = Field(default_factory=list)
@@ -97,6 +97,9 @@ class PipelineResult(ContractModel):
     warnings: list[str] = Field(default_factory=list)
     profile_trace: list[dict[str, Any]] = Field(default_factory=list)
     cv_trace: list[dict[str, Any]] = Field(default_factory=list)
+    # Present only when Profile Builder failed; never reuse invalid model text
+    # as trusted candidate data. Useful for diagnosing Qwen JSON truncation.
+    profile_error_responses: list[dict[str, Any]] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
@@ -169,6 +172,8 @@ def run_pipeline(
     seen = {normalize_repository(ref) for ref in request.repositories}
     retained: list[RepoAnalysis] = []
     for analysis in cached_analyses:
+        if len(seen) >= MAX_REPOSITORIES:
+            raise ValueError(f"Pipeline supports at most {MAX_REPOSITORIES} repositories")
         if not isinstance(analysis, RepoAnalysis):
             raise TypeError("cached_analyses must contain RepoAnalysis")
         key = normalize_repository(
@@ -262,6 +267,10 @@ def run_pipeline(
         result.problems.append(
             _problem(PipelineStage.PROFILE, "profile_failed", exc)
         )
+        result.profile_error_responses = [
+            {**entry, "raw_content": entry["raw_content"][:8000]}
+            for entry in observed_profile.raw_responses[-2:]
+        ]
         return result
     finally:
         result.profile_trace = observed_profile.calls
