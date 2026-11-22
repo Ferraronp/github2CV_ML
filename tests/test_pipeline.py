@@ -191,6 +191,12 @@ def test_real_vertical_slice_accepts_two_repos_and_preserves_all_provenance(tmp_
     assert manifest["has_resume"] is True
     assert manifest["evidence_count"] == 2
     assert "cv/resume.json" in manifest["artifacts"]
+    assert "provenance/evidence_index.json" in manifest["artifacts"]
+    index = json.loads(
+        (output / "provenance" / "evidence_index.json").read_text("utf-8")
+    )
+    assert set(index) == set(result.evidence_index)
+    assert all(entry["source"]["commit_sha"] == SHA for entry in index.values())
     assert (output / "cv" / "resume_preview.md").is_file()
     assert (output / "profile" / "candidate_profile.json").is_file()
     assert len(list((output / "snapshots").glob("*.json"))) == 2
@@ -239,10 +245,17 @@ def test_failed_profile_preserves_analysis_and_identifies_stage(tmp_path):
     assert result.problems[-1].stage == PipelineStage.PROFILE
     assert result.problems[-1].code == "profile_failed"
     assert len(result.profile_trace) == 2  # failed response and retry
+    assert len(result.profile_error_responses) == 2
+    assert result.profile_error_responses[0]["raw_content"] == '{"skills": ['
     output = tmp_path / "failed"
     write_pipeline_artifacts(result, output)
     assert len(list((output / "analyses").glob("*/analysis.json"))) == 1
     assert not (output / "cv" / "resume.json").exists()
+    debug = json.loads(
+        (output / "profile" / "llm_profile_error.json").read_text("utf-8")
+    )
+    assert debug["problems"][0]["code"] == "profile_failed"
+    assert len(debug["responses"]) == 2
 
 
 def test_failed_cv_preserves_profile_with_stage_context():
@@ -389,3 +402,36 @@ def test_cli_accepts_cached_analysis_without_new_git_requests(tmp_path, monkeypa
     assert rc == 0
     assert (output / "cv/resume.json").is_file()
     assert (output / "snapshots").exists() is False
+
+
+
+def test_cached_repositories_count_toward_global_limit():
+    previous = run_pipeline(
+        request("example/api", max_steps=4, max_reads=2, min_planned_reads=1),
+        github_client=FakeGitHub(), model=FakeThreeStageModel(),
+    )
+    with pytest.raises(ValueError, match="at most 20"):
+        run_pipeline(
+            request(*[f"owner/repo{i:02d}" for i in range(20)]),
+            github_client=FakeGitHub(), model=FakeThreeStageModel(),
+            cached_analyses=previous.analyses,
+        )
+
+
+def test_cli_failure_returns_code_two_and_still_saves_artifacts(tmp_path, monkeypatch):
+    from github2cv_ml import pipeline_cli
+
+    monkeypatch.setattr(pipeline_cli, "GitHubApiClient", lambda token=None: FakeGitHub())
+    monkeypatch.setattr(
+        pipeline_cli, "LocalOpenAIModel",
+        lambda **kwargs: FakeThreeStageModel(no_evidence=True),
+    )
+    output = tmp_path / "incomplete"
+    exit_code = pipeline_cli.main([
+        "--github-login", "dev", "--repo", "example/api",
+        "--max-steps", "4", "--max-reads", "2",
+        "--min-planned-reads", "1", "--output", str(output),
+    ])
+    assert exit_code == 2
+    assert (output / "pipeline_result.json").is_file()
+    assert not (output / "cv" / "resume.json").exists()
