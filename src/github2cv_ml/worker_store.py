@@ -30,6 +30,10 @@ class IdempotencyConflict(ValueError):
     """The same message UUID was reused with a different request body."""
 
 
+class LeaseLost(RuntimeError):
+    """A stale worker tried to mutate a lease owned by another generation."""
+
+
 def analysis_cache_key(
     url: str,
     commit_sha: str,
@@ -130,7 +134,14 @@ class WorkerStore:
             (key, repo_key, analysis.commit_sha.lower(), raw, int(time.time())),
         )
 
-    def claim(self, request: MLJobRequest, *, lease_seconds: int = 180) -> MLJobResult | None:
+    def claim(
+        self, request: MLJobRequest, *, lease_seconds: int = 180
+    ) -> int | MLJobResult:
+        """Return a monotonically increasing fencing token or a persisted result.
+
+        The attempts column *is* the fencing generation. Every reclaim increments
+        it under BEGIN IMMEDIATE; stale workers cannot write or release it.
+        """
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be positive")
         payload_hash = hashlib.sha256(request.model_dump_json().encode()).hexdigest()
@@ -138,7 +149,7 @@ class WorkerStore:
         self.db.execute("BEGIN IMMEDIATE")
         try:
             row = self.db.execute(
-                "SELECT payload_sha256, state, lease_until, result_json "
+                "SELECT payload_sha256, state, lease_until, result_json, attempts "
                 "FROM messages WHERE message_id=?", (str(request.message_id),)
             ).fetchone()
             if row is not None:
@@ -148,12 +159,14 @@ class WorkerStore:
                     return MLJobResult.model_validate_json(row[3])
                 if row[2] > now:
                     raise JobBusy("ML job is already being processed")
+                token = int(row[4]) + 1
                 self.db.execute(
-                    "UPDATE messages SET lease_until=?, attempts=attempts+1 "
-                    "WHERE message_id=?",
-                    (now + lease_seconds, str(request.message_id)),
+                    "UPDATE messages SET lease_until=?, attempts=? "
+                    "WHERE message_id=? AND state='processing'",
+                    (now + lease_seconds, token, str(request.message_id)),
                 )
             else:
+                token = 1
                 self.db.execute(
                     "INSERT INTO messages("
                     "message_id, payload_sha256, state, lease_until, "
@@ -161,47 +174,59 @@ class WorkerStore:
                     ") VALUES(?, ?, 'processing', ?, 1, NULL, ?)",
                     (str(request.message_id), payload_hash, now + lease_seconds, now),
                 )
-            return None
+            return token
         finally:
             self.db.execute("COMMIT")
 
-    def save_result(self, request: MLJobRequest, result: MLJobResult) -> None:
+    def save_result(
+        self, request: MLJobRequest, result: MLJobResult, *, lease_token: int
+    ) -> None:
         if result.request_message_id != request.message_id or result.job_id != request.job_id:
             raise ValueError("Result is not for this job")
+        now = int(time.time())
         cur = self.db.execute(
             """
             UPDATE messages SET state='ready', result_json=?, lease_until=0
             WHERE message_id=? AND state='processing'
+              AND attempts=? AND lease_until>?
             """,
-            (result.model_dump_json(), str(request.message_id)),
+            (result.model_dump_json(), str(request.message_id), lease_token, now),
         )
         if cur.rowcount != 1:
-            raise RuntimeError("Could not persist result for the claimed message")
+            raise LeaseLost("Cannot save result: processing lease was lost or expired")
 
-
-    def renew(self, message_id: str, *, lease_seconds: int = 180) -> None:
+    def renew(
+        self, message_id: str, *, lease_token: int, lease_seconds: int = 180
+    ) -> None:
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be positive")
-        self.db.execute(
+        now = int(time.time())
+        cur = self.db.execute(
             "UPDATE messages SET lease_until=? "
-            "WHERE message_id=? AND state='processing'",
-            (int(time.time()) + lease_seconds, message_id),
+            "WHERE message_id=? AND state='processing' "
+            "AND attempts=? AND lease_until>?",
+            (now + lease_seconds, message_id, lease_token, now),
         )
+        if cur.rowcount != 1:
+            raise LeaseLost("Cannot renew: processing lease was lost or expired")
 
-    def release(self, message_id: str) -> None:
-        """Allow another delivery to retry after a recoverable processing error."""
-        self.db.execute(
+    def release(self, message_id: str, *, lease_token: int) -> None:
+        """Only the owner of the still-valid lease may permit another delivery."""
+        cur = self.db.execute(
             "UPDATE messages SET lease_until=0 "
-            "WHERE message_id=? AND state='processing'",
-            (message_id,),
+            "WHERE message_id=? AND state='processing' "
+            "AND attempts=? AND lease_until>?",
+            (message_id, lease_token, int(time.time())),
         )
+        if cur.rowcount != 1:
+            raise LeaseLost("Cannot release: processing lease was lost or expired")
 
-
-    def attempt_count(self, message_id: str) -> int:
+    def attempt_count(self, message_id: str, *, lease_token: int) -> int:
         row = self.db.execute(
-            "SELECT attempts FROM messages WHERE message_id=? AND state='processing'",
-            (message_id,),
+            "SELECT attempts FROM messages WHERE message_id=? AND state='processing' "
+            "AND attempts=? AND lease_until>?",
+            (message_id, lease_token, int(time.time())),
         ).fetchone()
         if row is None:
-            raise ValueError("No processing job with this ID")
+            raise LeaseLost("Cannot inspect attempts: processing lease was lost")
         return int(row[0])
