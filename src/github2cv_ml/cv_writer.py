@@ -137,8 +137,10 @@ def _resolve_item(
     if len(ids) > 24:
         raise ValueError(f"{component} exceeds 24 claim references")
     text = _CLAIM_MARKER.sub("", proposed.text)
-    # Removing markers also removes now-empty parentheses and doubled spaces.
-    text = re.sub(r"\(\s*\)", "", text)
+    # Gemma commonly writes [claim-one, claim-two] inline; the source IDs
+    # belong only to claim_ids, never to visible prose or empty brackets.
+    text = re.sub(r"\[\s*(?:,\s*)*\]", "", text)
+    text = re.sub(r"\(\s*(?:,\s*)*\)", "", text)
     text = re.sub(r"\s+([.,;:])", r"\1", text)
     text = " ".join(text.split())
     if not text:
