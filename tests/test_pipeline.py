@@ -655,3 +655,46 @@ def test_failed_response_if_event_exceeds_transport_limit(tmp_path):
     assert result.type == "github.report.failed"
     assert "exceeded" in result.error
     assert result.resume is None
+
+
+def test_worker_retries_internal_error_only_three_times(tmp_path):
+    from github2cv_ml.worker_service import JobProcessor
+
+    class BrokenProcessor(JobProcessor):
+        def _run(self, request, store):
+            raise RuntimeError("Deliberate failure")
+
+    processor = BrokenProcessor(
+        db_path=tmp_path / "broken.sqlite3",
+        github_client=FakeGitHub(),
+        model=FakeThreeStageModel(),
+        model_id="fake",
+    )
+    request_msg = _worker_request("api")
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="Deliberate"):
+            processor.process(request_msg)
+    terminal = processor.process(request_msg)
+    assert terminal.type == "github.report.failed"
+    assert "3 attempts" in terminal.error
+    assert terminal.status == PipelineStatus.FAILED
+    assert processor.process(request_msg) == terminal
+
+
+def test_pipeline_public_only_even_if_github_token_has_private_access():
+    class PrivateGitHub(FakeGitHub):
+        def get_repository(self, owner, name):
+            metadata = super().get_repository(owner, name)
+            return {**metadata, "private": True}
+
+    github = PrivateGitHub()
+    result = run_pipeline(
+        request("example/api", max_steps=4, max_reads=2,
+                min_planned_reads=1),
+        github_client=github, model=FakeThreeStageModel(),
+        pinned_shas={"example/api": SHA},
+    )
+    assert result.status == PipelineStatus.FAILED
+    assert result.snapshots == [] and result.analyses == []
+    assert result.problems[0].stage == PipelineStage.COLLECT
+    assert not github.source_refs
