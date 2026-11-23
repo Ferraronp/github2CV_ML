@@ -157,9 +157,36 @@ class JobProcessor:
                         error="Result exceeded RabbitMQ message limit; cached analyses retained",
                     )
                 store.save_result(request, result)
-            except Exception:
-                store.release(str(request.message_id))
-                raise
+            except Exception as exc:
+                if store.attempt_count(str(request.message_id)) >= 3:
+                    # Poison jobs are terminal after three durable processing
+                    # attempts; publishing may still retry using the same result.
+                    result = MLJobResult(
+                        type="github.report.failed",
+                        message_id=response_id(request),
+                        request_message_id=request.message_id,
+                        job_id=request.job_id,
+                        input_revision=request.input_revision,
+                        status=PipelineStatus.FAILED,
+                        repositories=[
+                            MLRepositoryResult(
+                                repo_id=item.repo_id,
+                                repository_url=item.repository_url,
+                                commit_sha=item.commit_sha,
+                                context_hash=item.context_hash,
+                                status="failed",
+                            ) for item in request.repositories
+                        ],
+                        error="ML worker failed after 3 attempts; inspect worker logs",
+                    )
+                    store.save_result(request, result)
+                    logger.error(
+                        "ml_job_exhausted",
+                        extra={"job_id": str(request.job_id), "stage": type(exc).__name__},
+                    )
+                else:
+                    store.release(str(request.message_id))
+                    raise
         logger.info(
             "ml_job_processed",
             extra={
