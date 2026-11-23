@@ -19,7 +19,6 @@ from github2cv_ml.pipeline import (
     PipelineProblem,
     PipelineRequest,
     PipelineResult,
-    PipelineStage,
     PipelineStatus,
     normalize_repository,
     run_pipeline,
