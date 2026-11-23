@@ -26,7 +26,7 @@ from github2cv_ml.agent.runner import LocalOpenAIModel
 from github2cv_ml.collectors.github_client import GitHubApiClient
 from github2cv_ml.worker_contracts import MLJobRequest
 from github2cv_ml.worker_service import MAX_EVENT_BYTES, JobProcessor
-from github2cv_ml.worker_store import JobBusy, WorkerStore
+from github2cv_ml.worker_store import IdempotencyConflict, JobBusy, WorkerStore
 
 logger = logging.getLogger("github2cv_ml.rabbitmq_worker")
 
@@ -182,6 +182,10 @@ class RabbitMLWorker:
                 extra={"job_id": job_id, "message_id": str(request.message_id),
                        "status": result.status},
             )
+        except IdempotencyConflict:
+            # A different payload with the same UUID is a permanent error.
+            await self._publish_invalid(message.body, "idempotency_conflict")
+            await message.ack()
         except JobBusy:
             logger.warning("ml_duplicate_inflight", extra={"job_id": job_id})
             await asyncio.sleep(5)
