@@ -9,6 +9,7 @@ store from SQLite to a shared artifact service without touching CV contracts.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ from github2cv_ml.worker_contracts import (
     MLJobResult,
     MLRepositoryResult,
 )
-from github2cv_ml.worker_store import WorkerStore, analysis_cache_key
+from github2cv_ml.worker_store import LeaseLost, WorkerStore, analysis_cache_key
 
 logger = logging.getLogger(__name__)
 MAX_EVENT_BYTES = 4_000_000
@@ -125,67 +126,113 @@ class JobProcessor:
     def process(self, request: MLJobRequest) -> MLJobResult:
         started = time.monotonic()
         with WorkerStore(self.db_path) as store:
-            previous = store.claim(request)
-            if previous is not None:
+            claimed = store.claim(request)
+            if isinstance(claimed, MLJobResult):
                 logger.info(
                     "ml_job_replayed",
                     extra={"job_id": str(request.job_id), "message_id": str(request.message_id)},
                 )
-                return previous
+                return claimed
+
+            lease_token = claimed
+            stopped = threading.Event()
+            lease_lost = threading.Event()
+
+            def keep_alive() -> None:
+                # The heartbeat belongs to the exact claim generation, not to
+                # the AMQP delivery. It cannot renew a successor's lease.
+                while not stopped.wait(30):
+                    try:
+                        with WorkerStore(self.db_path) as heartbeat_store:
+                            heartbeat_store.renew(
+                                str(request.message_id), lease_token=lease_token
+                            )
+                    except LeaseLost:
+                        lease_lost.set()
+                        logger.warning(
+                            "ml_lease_lost", extra={"job_id": str(request.job_id)}
+                        )
+                        return
+                    except Exception:
+                        logger.warning(
+                            "ml_heartbeat_failed", extra={"job_id": str(request.job_id)}
+                        )
+
+            heartbeat = threading.Thread(
+                target=keep_alive, name="ml-lease-heartbeat", daemon=True
+            )
+            heartbeat.start()
             try:
-                result = self._run(request, store)
-                # A large response should not get stuck in an infinite republish
-                # cycle: failed event is small, while per-repo cache stays local.
-                if len(result.model_dump_json().encode("utf-8")) > self.max_event_bytes:
-                    result = MLJobResult(
-                        type="github.report.failed",
-                        message_id=response_id(request),
-                        request_message_id=request.message_id,
-                        job_id=request.job_id,
-                        input_revision=request.input_revision,
-                        status=PipelineStatus.FAILED,
-                        repositories=[
-                            MLRepositoryResult(
-                                repo_id=item.repo_id,
-                                repository_url=item.repository_url,
-                                commit_sha=item.commit_sha,
-                                context_hash=item.context_hash,
-                                status="failed",
-                            ) for item in request.repositories
-                        ],
-                        error="Result exceeded RabbitMQ message limit; cached analyses retained",
-                    )
-                store.save_result(request, result)
-            except Exception as exc:
-                if store.attempt_count(str(request.message_id)) >= 3:
-                    # Poison jobs are terminal after three durable processing
-                    # attempts; publishing may still retry using the same result.
-                    result = MLJobResult(
-                        type="github.report.failed",
-                        message_id=response_id(request),
-                        request_message_id=request.message_id,
-                        job_id=request.job_id,
-                        input_revision=request.input_revision,
-                        status=PipelineStatus.FAILED,
-                        repositories=[
-                            MLRepositoryResult(
-                                repo_id=item.repo_id,
-                                repository_url=item.repository_url,
-                                commit_sha=item.commit_sha,
-                                context_hash=item.context_hash,
-                                status="failed",
-                            ) for item in request.repositories
-                        ],
-                        error="ML worker failed after 3 attempts; inspect worker logs",
-                    )
-                    store.save_result(request, result)
-                    logger.error(
-                        "ml_job_exhausted",
-                        extra={"job_id": str(request.job_id), "stage": type(exc).__name__},
-                    )
-                else:
-                    store.release(str(request.message_id))
+                try:
+                    result = self._run(request, store)
+                    # The normal result may exceed the broker limit. A compact
+                    # failed event preserves the job identity, but it may also
+                    # exceed an unusually small limit (many repositories).
+                    if len(result.model_dump_json().encode("utf-8")) > self.max_event_bytes:
+                        result = MLJobResult(
+                            type="github.report.failed",
+                            message_id=response_id(request),
+                            request_message_id=request.message_id,
+                            job_id=request.job_id,
+                            input_revision=request.input_revision,
+                            status=PipelineStatus.FAILED,
+                            repositories=[
+                                MLRepositoryResult(
+                                    repo_id=item.repo_id,
+                                    repository_url=item.repository_url,
+                                    commit_sha=item.commit_sha,
+                                    context_hash=item.context_hash,
+                                    status="failed",
+                                ) for item in request.repositories
+                            ],
+                            error="Result exceeded RabbitMQ message limit; cached analyses retained",
+                        )
+                    if len(result.model_dump_json().encode("utf-8")) > self.max_event_bytes:
+                        logger.warning(
+                            "ml_fallback_exceeds_limit",
+                            extra={"job_id": str(request.job_id)},
+                        )
+                    if lease_lost.is_set():
+                        raise LeaseLost("Processing lease was lost during generation")
+                    store.save_result(request, result, lease_token=lease_token)
+                except LeaseLost:
+                    # Never mark a successor's attempt as failed or clear its lease.
                     raise
+                except Exception as exc:
+                    attempts = store.attempt_count(
+                        str(request.message_id), lease_token=lease_token
+                    )
+                    if attempts >= 3:
+                        result = MLJobResult(
+                            type="github.report.failed",
+                            message_id=response_id(request),
+                            request_message_id=request.message_id,
+                            job_id=request.job_id,
+                            input_revision=request.input_revision,
+                            status=PipelineStatus.FAILED,
+                            repositories=[
+                                MLRepositoryResult(
+                                    repo_id=item.repo_id,
+                                    repository_url=item.repository_url,
+                                    commit_sha=item.commit_sha,
+                                    context_hash=item.context_hash,
+                                    status="failed",
+                                ) for item in request.repositories
+                            ],
+                            error="ML worker failed after 3 attempts; inspect worker logs",
+                        )
+                        store.save_result(request, result, lease_token=lease_token)
+                        logger.error(
+                            "ml_job_exhausted",
+                            extra={"job_id": str(request.job_id), "stage": type(exc).__name__},
+                        )
+                    else:
+                        store.release(str(request.message_id), lease_token=lease_token)
+                        raise
+            finally:
+                stopped.set()
+                heartbeat.join()
+
         logger.info(
             "ml_job_processed",
             extra={
