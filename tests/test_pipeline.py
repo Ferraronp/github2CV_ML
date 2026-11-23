@@ -698,3 +698,58 @@ def test_pipeline_public_only_even_if_github_token_has_private_access():
     assert result.snapshots == [] and result.analyses == []
     assert result.problems[0].stage == PipelineStage.COLLECT
     assert not github.source_refs
+
+
+def test_cached_partial_analysis_marks_entire_pipeline_partial():
+    """Regression: cached read_budget_exhausted previously became completed."""
+    initial = run_pipeline(
+        request("example/api", max_steps=4, max_reads=2, min_planned_reads=1),
+        github_client=FakeGitHub(), model=FakeThreeStageModel(),
+    )
+    cached = initial.analyses[0].model_copy(update={"status": "read_budget_exhausted"})
+    result = run_pipeline(
+        request(), github_client=None, model=FakeThreeStageModel(),
+        cached_analyses=[cached],
+    )
+    assert result.resume is not None
+    assert result.status == PipelineStatus.PARTIAL
+    assert result.problems == []
+    assert len(result.warnings) == 1
+    assert "example/api" in result.warnings[0]
+    assert "read_budget_exhausted" in result.warnings[0]
+
+
+def test_cached_no_evidence_with_good_fresh_repo_is_partial():
+    """A cached empty analysis must keep its repo-level no_evidence problem."""
+    empty = run_pipeline(
+        request("example/empty", max_steps=4, max_reads=2, min_planned_reads=1),
+        github_client=FakeGitHub(), model=FakeThreeStageModel(no_evidence=True),
+    ).analyses[0]
+    result = run_pipeline(
+        request("example/api", max_steps=4, max_reads=2, min_planned_reads=1),
+        github_client=FakeGitHub(), model=FakeThreeStageModel(),
+        cached_analyses=[empty],
+    )
+    assert result.resume is not None
+    assert result.status == PipelineStatus.PARTIAL
+    assert [(p.code, p.repository) for p in result.problems] == [
+        ("no_evidence", "example/empty"),
+    ]
+    assert len([c for c in result.profile.claims if c.kind == "project"]) == 1
+
+
+def test_only_cached_empty_evidence_fails_with_repo_and_profile_diagnostics():
+    empty = run_pipeline(
+        request("example/empty", max_steps=4, max_reads=2, min_planned_reads=1),
+        github_client=FakeGitHub(), model=FakeThreeStageModel(no_evidence=True),
+    ).analyses[0]
+    result = run_pipeline(
+        request(), github_client=None, model=FakeThreeStageModel(),
+        cached_analyses=[empty],
+    )
+    assert result.status == PipelineStatus.FAILED
+    assert result.resume is None
+    assert [(p.stage, p.code, p.repository) for p in result.problems] == [
+        (PipelineStage.ANALYZE, "no_evidence", "example/empty"),
+        (PipelineStage.PROFILE, "no_evidence", None),
+    ]
