@@ -26,7 +26,7 @@ from github2cv_ml.agent.runner import LocalOpenAIModel
 from github2cv_ml.collectors.github_client import GitHubApiClient
 from github2cv_ml.worker_contracts import MLJobRequest
 from github2cv_ml.worker_service import MAX_EVENT_BYTES, JobProcessor
-from github2cv_ml.worker_store import IdempotencyConflict, JobBusy, WorkerStore
+from github2cv_ml.worker_store import IdempotencyConflict, JobBusy, LeaseLost
 
 logger = logging.getLogger("github2cv_ml.rabbitmq_worker")
 
@@ -83,20 +83,6 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(result, ensure_ascii=False)
 
 
-def _heartbeat_once(path: Path, message_id: str) -> None:
-    with WorkerStore(path) as store:
-        store.renew(message_id)
-
-
-async def _heartbeat(path: Path, message_id: str) -> None:
-    while True:
-        await asyncio.sleep(30)
-        try:
-            await asyncio.to_thread(_heartbeat_once, path, message_id)
-        except Exception:
-            logger.warning("ml_job_heartbeat_failed", extra={"message_id": message_id})
-
-
 class RabbitMLWorker:
     def __init__(self, settings: RabbitSettings, processor: JobProcessor):
         self.settings = settings
@@ -147,14 +133,21 @@ class RabbitMLWorker:
             return
 
         job_id = str(request.job_id)
-        heart = asyncio.create_task(
-            _heartbeat(self.processor.db_path, str(request.message_id))
-        )
         try:
             result = await asyncio.to_thread(self.processor.process, request)
             body = result.model_dump_json().encode()
             if len(body) > self.settings.message_limit:
-                raise ValueError("Result exceeds configured broker message size")
+                # Even the compact MLJobResult can exceed a tiny limit when
+                # the request has many repositories. This is permanent, not
+                # a transport failure: put a bounded diagnostic in DLQ and
+                # ACK only after the DLQ publisher confirms.
+                await self._publish_invalid(message.body, "oversized_response")
+                await message.ack()
+                logger.error(
+                    "ml_result_oversized_dead_lettered",
+                    extra={"job_id": job_id, "message_id": str(request.message_id)},
+                )
+                return
             routing_key = (
                 self.settings.completed_key
                 if result.type == "github.report.completed"
@@ -191,6 +184,12 @@ class RabbitMLWorker:
             except Exception:
                 await asyncio.sleep(5)
                 await message.nack(requeue=True)
+        except LeaseLost:
+            # A successor has reclaimed the message. Never publish the stale
+            # result; the successor (or the persisted ready result) will win.
+            logger.warning("ml_stale_attempt_discarded", extra={"job_id": job_id})
+            await asyncio.sleep(5)
+            await message.nack(requeue=True)
         except JobBusy:
             logger.warning("ml_duplicate_inflight", extra={"job_id": job_id})
             await asyncio.sleep(5)
@@ -204,11 +203,6 @@ class RabbitMLWorker:
             )
             await asyncio.sleep(5)
             await message.nack(requeue=True)
-        finally:
-            heart.cancel()
-            with suppress(asyncio.CancelledError):
-                await heart
-
     async def run(self) -> None:
         connection = await aio_pika.connect_robust(self.settings.url)
         try:
