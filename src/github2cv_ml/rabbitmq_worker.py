@@ -184,8 +184,13 @@ class RabbitMLWorker:
             )
         except IdempotencyConflict:
             # A different payload with the same UUID is a permanent error.
-            await self._publish_invalid(message.body, "idempotency_conflict")
-            await message.ack()
+            # Never ACK until the invalid-event publisher confirm succeeds.
+            try:
+                await self._publish_invalid(message.body, "idempotency_conflict")
+                await message.ack()
+            except Exception:
+                await asyncio.sleep(5)
+                await message.nack(requeue=True)
         except JobBusy:
             logger.warning("ml_duplicate_inflight", extra={"job_id": job_id})
             await asyncio.sleep(5)
@@ -270,8 +275,8 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logging.getLogger().handlers[0].setFormatter(JsonFormatter())
-    logging.getLogger("aio_pika").setLevel(logging.WARNING)
-    logging.getLogger("aiormq").setLevel(logging.WARNING)
+    logging.getLogger("aio_pika").setLevel(logging.CRITICAL)
+    logging.getLogger("aiormq").setLevel(logging.CRITICAL)
 
     processor = JobProcessor(
         db_path=args.store,
