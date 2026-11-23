@@ -253,8 +253,10 @@ def test_gemma_square_bracket_claim_citations_are_not_visible():
 
 def test_gemma_inline_evidence_id_stays_in_metadata_not_profile_or_cv():
     """The 03743d68 RAG project had [ev-9fb871477ccac05e] in its prose."""
+    from test_pipeline import FakeGitHub, FakeThreeStageModel
+    from test_pipeline import request as pipeline_request
+
     from github2cv_ml.pipeline import PipelineStatus, run_pipeline
-    from test_pipeline import FakeGitHub, FakeThreeStageModel, request as pipeline_request
 
     class InlineEvidence(FakeThreeStageModel):
         def complete(self, messages, *, tools=None, json_mode=False):
