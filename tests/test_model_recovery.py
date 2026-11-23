@@ -331,3 +331,27 @@ def test_qwen_category_to_tool_merge_is_rejected_but_spelling_merge_survives():
         "reason": "Same framework name with only punctuation difference.",
     }]}
     assert model.events[-1]["skipped"] == 1
+
+
+
+def test_gemma_recommended_sampling_keeps_llm_and_vlm_integration_distinct():
+    """Real Gemma 1.0 run incorrectly equated LLM and VLM integration."""
+    payload = {
+        "task": "skill_reconciliation",
+        "skills": [{"name": "LLM integration"}, {"name": "VLM integration"}],
+    }
+    llm = Responses({"merges": [{
+        "canonical": "LLM integration",
+        "aliases": ["VLM integration"],
+        "reason": (
+            "The model claims that connecting VLM and LLM services "
+            "is the same integration competency."
+        ),
+    }]})
+    recovering = RecoveringModel(llm)
+    answer = recovering.complete([
+        {"role": "system", "content": "Reconcile exact aliases"},
+        {"role": "user", "content": json.dumps(payload)},
+    ], json_mode=True)
+    assert json.loads(answer["content"]) == {"merges": []}
+    assert recovering.events[-1]["skipped"] == 1
