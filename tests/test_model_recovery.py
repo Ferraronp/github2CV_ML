@@ -225,3 +225,71 @@ def test_regular_tool_calls_do_not_trigger_schema_repair():
     )
     assert output["tool_calls"][0]["function"]["name"] == "read_file"
     assert recovering.events == []
+
+
+def test_gemma_square_bracket_claim_citations_are_not_visible():
+    """Real 03743d68 zip embeds one or several claims in [brackets]."""
+    p = profile()
+    p.claims[3].id = PROJECT_CLAIM
+    skill_id = "claim-skill-1111111111111111"
+    p.claims[0].id = skill_id
+    llm = Responses({
+        "summary": {
+            "text": (
+                f"RAG использует векторный поиск [{PROJECT_CLAIM}]. "
+                f"Технологии доступны в проектах [{PROJECT_CLAIM}, {skill_id}]."
+            ),
+            "claim_ids": [PROJECT_CLAIM, skill_id],
+        },
+        "headline": None,
+    })
+    resume = write_resume(p, model=llm)
+    assert "claim-" not in resume.summary.text
+    assert "[" not in resume.summary.text
+    assert "]" not in resume.summary.text
+    assert "[]" not in resume.summary.text
+    assert set(resume.summary.claim_ids) == {PROJECT_CLAIM, skill_id}
+
+
+def test_gemma_inline_evidence_id_stays_in_metadata_not_profile_or_cv():
+    """The 03743d68 RAG project had [ev-9fb871477ccac05e] in its prose."""
+    from github2cv_ml.pipeline import PipelineStatus, run_pipeline
+    from test_pipeline import FakeGitHub, FakeThreeStageModel, request as pipeline_request
+
+    class InlineEvidence(FakeThreeStageModel):
+        def complete(self, messages, *, tools=None, json_mode=False):
+            answer = super().complete(messages, tools=tools, json_mode=json_mode)
+            if "You create an evidence-based technical candidate profile" in messages[0]["content"]:
+                parsed = json.loads(answer["content"])
+                parsed["project"]["paragraph"] += (
+                    f" [{parsed['project']['evidence_ids'][0]}]"
+                )
+                return {"content": json.dumps(parsed, ensure_ascii=False)}
+            return answer
+
+    result = run_pipeline(
+        pipeline_request("example/api", max_steps=4, max_reads=2,
+                         min_planned_reads=1),
+        github_client=FakeGitHub(), model=InlineEvidence(),
+    )
+    assert result.status == PipelineStatus.COMPLETED
+    assert result.resume is not None
+    project_claims = [claim for claim in result.profile.claims if claim.kind == "project"]
+    assert len(project_claims) == 1
+    assert project_claims[0].evidence_ids
+    assert "ev-" not in project_claims[0].text
+    project_section = next(x for x in result.resume.sections if x.title == "Проекты")
+    assert "ev-" not in project_section.items[0].text
+
+
+def test_unreferenced_inline_evidence_id_is_not_silently_dropped():
+    bad = proposal()
+    bad["project"]["paragraph"] += f" [{UNKNOWN_EVIDENCE}]"
+    llm = Responses(bad, bad, bad)
+    recovery = RecoveringModel(llm)
+    answer = recovery.complete(request(), json_mode=True)
+    with pytest.raises(ValueError, match="Unreferenced inline evidence_ids"):
+        recovery._supported_proposal(
+            json.loads(answer["content"]), {EVIDENCE_A, EVIDENCE_B}
+        )
+    assert len(recovery.events) == 3
