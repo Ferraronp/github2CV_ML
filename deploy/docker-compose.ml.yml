@@ -1,13 +1,12 @@
-# Overlay for the *backend* docker-compose.yml. Run from the parent directory:
-# docker compose -f PP-AUT-2026-API/docker-compose.yml \
-#   -f github2CV_ML/deploy/docker-compose.ml.yml up -d
-#
-# Paths are relative to the FIRST Compose file (the backend directory).
+# Overlay for ResumeHub's backend/docker-compose.yml (from the monorepo root):
+# docker compose -f backend/docker-compose.yml -f ml/deploy/docker-compose.ml.yml up -d
+# Paths in build.context are relative to the FIRST Compose file (backend/).
+# Set ML_BUILD_CONTEXT=../github2CV_ML for separately cloned sibling repositories.
 # Llama.cpp stays outside Docker on the host's port 8080.
 services:
   ml-core:
     build:
-      context: ../github2CV_ML
+      context: ${ML_BUILD_CONTEXT:-../ml}
       dockerfile: deploy/Dockerfile.worker
     restart: unless-stopped
     command:
