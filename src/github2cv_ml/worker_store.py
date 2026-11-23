@@ -72,6 +72,7 @@ class WorkerStore:
                 payload_sha256 TEXT NOT NULL,
                 state TEXT NOT NULL CHECK (state IN ('processing', 'ready')),
                 lease_until INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 1,
                 result_json TEXT,
                 created_at INTEGER NOT NULL
             );
@@ -144,12 +145,16 @@ class WorkerStore:
                 if row[2] > now:
                     raise JobBusy("ML job is already being processed")
                 self.db.execute(
-                    "UPDATE messages SET lease_until=? WHERE message_id=?",
+                    "UPDATE messages SET lease_until=?, attempts=attempts+1 "
+                    "WHERE message_id=?",
                     (now + lease_seconds, str(request.message_id)),
                 )
             else:
                 self.db.execute(
-                    "INSERT INTO messages VALUES(?, ?, 'processing', ?, NULL, ?)",
+                    "INSERT INTO messages("
+                    "message_id, payload_sha256, state, lease_until, "
+                    "attempts, result_json, created_at"
+                    ") VALUES(?, ?, 'processing', ?, 1, NULL, ?)",
                     (str(request.message_id), payload_hash, now + lease_seconds, now),
                 )
             return None
@@ -186,3 +191,13 @@ class WorkerStore:
             "WHERE message_id=? AND state='processing'",
             (message_id,),
         )
+
+
+    def attempt_count(self, message_id: str) -> int:
+        row = self.db.execute(
+            "SELECT attempts FROM messages WHERE message_id=? AND state='processing'",
+            (message_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("No processing job with this ID")
+        return int(row[0])
