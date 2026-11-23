@@ -859,3 +859,24 @@ def test_expired_lease_without_successor_cannot_finalize(tmp_path, monkeypatch):
         with pytest.raises(LeaseLost):
             store.release(str(req.message_id), lease_token=token)
         assert store.claim(req) == 2
+
+
+def test_rabbitmq_v2_result_includes_model_recovery_audit(tmp_path):
+    """Backend receives the same recovery diagnostics, not just a vague warning."""
+    from github2cv_ml.worker_service import JobProcessor
+
+    processor = JobProcessor(
+        db_path=tmp_path / "recovering.sqlite3",
+        github_client=FakeGitHub(),
+        model=FakeThreeStageModel(broken_cv=True),
+        model_id="fake",
+    )
+    result = processor.process(_worker_request("api"))
+    assert result.type == "github.report.completed"
+    assert result.status == PipelineStatus.PARTIAL
+    assert result.resume is not None
+    assert any(
+        event["kind"] == "conservative_fallback"
+        for event in result.correction_events
+    )
+    assert "raw_content" not in result.model_dump_json()
