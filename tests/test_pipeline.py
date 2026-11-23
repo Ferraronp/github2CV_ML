@@ -621,13 +621,19 @@ def test_store_processing_lease_prevents_concurrent_duplicate_until_released(tmp
 
     request_msg = _worker_request("api")
     with WorkerStore(tmp_path / "ml.sqlite3") as store:
-        assert store.claim(request_msg) is None
-        assert store.attempt_count(str(request_msg.message_id)) == 1
+        first_token = store.claim(request_msg)
+        assert first_token == 1
+        assert store.attempt_count(
+            str(request_msg.message_id), lease_token=first_token
+        ) == 1
         with pytest.raises(JobBusy):
             store.claim(request_msg)
-        store.release(str(request_msg.message_id))
-        assert store.claim(request_msg) is None
-        assert store.attempt_count(str(request_msg.message_id)) == 2
+        store.release(str(request_msg.message_id), lease_token=first_token)
+        second_token = store.claim(request_msg)
+        assert second_token == 2
+        assert store.attempt_count(
+            str(request_msg.message_id), lease_token=second_token
+        ) == 2
 
 
 def test_worker_cache_keys_invalidate_sha_or_model_or_budget():
@@ -753,3 +759,75 @@ def test_only_cached_empty_evidence_fails_with_repo_and_profile_diagnostics():
         (PipelineStage.ANALYZE, "no_evidence", "example/empty"),
         (PipelineStage.PROFILE, "no_evidence", None),
     ]
+
+
+
+def test_expired_worker_cannot_save_renew_or_release_successor_lease(tmp_path, monkeypatch):
+    """Review regression: generation A must never mutate reclaimed generation B."""
+    from uuid import NAMESPACE_URL, uuid5
+
+    from github2cv_ml.worker_contracts import MLJobResult, MLRepositoryResult
+    from github2cv_ml.worker_store import LeaseLost, WorkerStore
+
+    clock = [1000]
+    monkeypatch.setattr("github2cv_ml.worker_store.time.time", lambda: clock[0])
+    db_path = tmp_path / "fencing.sqlite3"
+    req = _worker_request("api")
+    repo = req.repositories[0]
+    result = MLJobResult(
+        type="github.report.failed",
+        message_id=uuid5(NAMESPACE_URL, str(req.message_id)),
+        request_message_id=req.message_id,
+        job_id=req.job_id,
+        input_revision=req.input_revision,
+        status=PipelineStatus.FAILED,
+        repositories=[
+            MLRepositoryResult(
+                repo_id=repo.repo_id, repository_url=repo.repository_url,
+                commit_sha=repo.commit_sha, context_hash=repo.context_hash,
+                status="failed",
+            )
+        ],
+        error="Test-only failed result",
+    )
+    with WorkerStore(db_path) as store_a, WorkerStore(db_path) as store_b:
+        token_a = store_a.claim(req, lease_seconds=10)
+        assert token_a == 1
+        clock[0] = 1011  # A's heartbeat is gone; B can take the expired lease.
+        token_b = store_b.claim(req, lease_seconds=10)
+        assert token_b == 2
+
+        with pytest.raises(LeaseLost):
+            store_a.save_result(req, result, lease_token=token_a)
+        with pytest.raises(LeaseLost):
+            store_a.release(str(req.message_id), lease_token=token_a)
+        with pytest.raises(LeaseLost):
+            store_a.renew(str(req.message_id), lease_token=token_a)
+        with pytest.raises(LeaseLost):
+            store_a.attempt_count(str(req.message_id), lease_token=token_a)
+
+        # B is still the only owner, even after A's attempted release.
+        with pytest.raises(JobBusy):
+            store_a.claim(req, lease_seconds=10)
+        store_b.renew(str(req.message_id), lease_token=token_b, lease_seconds=15)
+        clock[0] = 1020
+        store_b.save_result(req, result, lease_token=token_b)
+        assert store_a.claim(req) == result
+        with pytest.raises(LeaseLost):
+            store_a.release(str(req.message_id), lease_token=token_a)
+
+
+def test_expired_lease_without_successor_cannot_finalize(tmp_path, monkeypatch):
+    from github2cv_ml.worker_store import LeaseLost, WorkerStore
+
+    clock = [50]
+    monkeypatch.setattr("github2cv_ml.worker_store.time.time", lambda: clock[0])
+    req = _worker_request("api")
+    with WorkerStore(tmp_path / "expired.sqlite3") as store:
+        token = store.claim(req, lease_seconds=5)
+        clock[0] = 56
+        with pytest.raises(LeaseLost):
+            store.renew(str(req.message_id), lease_token=token)
+        with pytest.raises(LeaseLost):
+            store.release(str(req.message_id), lease_token=token)
+        assert store.claim(req) == 2
