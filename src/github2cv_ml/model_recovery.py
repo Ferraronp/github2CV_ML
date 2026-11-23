@@ -234,6 +234,20 @@ class RecoveringModel:
             if invalid or not valid or used & seen:
                 skipped += 1
                 continue
+            # A model's explanation is NOT proof of semantic equivalence.
+            # Qwen merged the actual database Qdrant with the general skill
+            # "Vector Search" in a real smoke run. Until a reviewed synonym
+            # ontology exists, only accept superficial punctuation/case/spacing
+            # variants (e.g. "Fast-API" vs "FastAPI").
+            spelling = lambda value: "".join(
+                char for char in value.casefold() if char.isalnum()
+            )
+            if any(
+                spelling(alias) != spelling(names_by_key[key])
+                for alias in valid
+            ):
+                skipped += 1
+                continue
             group_safe = {
                 "canonical": names_by_key[key], "aliases": valid, "reason": reason.strip()
             }
