@@ -125,7 +125,7 @@ class WorkerStore:
             (key, repo_key, analysis.commit_sha.lower(), raw, int(time.time())),
         )
 
-    def claim(self, request: MLJobRequest, *, lease_seconds: int = 3600) -> MLJobResult | None:
+    def claim(self, request: MLJobRequest, *, lease_seconds: int = 180) -> MLJobResult | None:
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be positive")
         payload_hash = hashlib.sha256(request.model_dump_json().encode()).hexdigest()
@@ -168,3 +168,21 @@ class WorkerStore:
         )
         if cur.rowcount != 1:
             raise RuntimeError("Could not persist result for the claimed message")
+
+
+    def renew(self, message_id: str, *, lease_seconds: int = 180) -> None:
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds must be positive")
+        self.db.execute(
+            "UPDATE messages SET lease_until=? "
+            "WHERE message_id=? AND state='processing'",
+            (int(time.time()) + lease_seconds, message_id),
+        )
+
+    def release(self, message_id: str) -> None:
+        """Allow another delivery to retry after a recoverable processing error."""
+        self.db.execute(
+            "UPDATE messages SET lease_until=0 "
+            "WHERE message_id=? AND state='processing'",
+            (message_id,),
+        )
