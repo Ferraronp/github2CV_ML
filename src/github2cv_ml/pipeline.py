@@ -215,6 +215,10 @@ def run_pipeline(
         owner, name = key.split("/", 1)
         try:
             metadata = github_client.get_repository(owner, name)
+            if metadata.get("private") is True or metadata.get("visibility") not in (
+                None, "public",
+            ):
+                raise ValueError("Only public GitHub repositories are supported")
             branch = metadata.get("default_branch")
             if not isinstance(branch, str) or not branch.strip():
                 raise ValueError("GitHub default_branch is missing")
