@@ -262,11 +262,11 @@ class RecoveringModel:
             # Validate visible citation tokens too: the core Writer later
             # strips *known* claim markers into claim_ids, never unknown ones.
             embedded = set(re.findall(
-                r"(?<![\\w-])claim-[a-z]+-[0-9a-f]{16}(?![\\w-])", item.text
+                r"(?<![\w-])claim-[a-z]+-[0-9a-f]{16}(?![\w-])", item.text
             ))
             if embedded - available:
                 raise ValueError(f"Unknown inline claim ID in {label}")
-            if re.search(r"(?<![\\w-])ev-[0-9a-f]{16}(?![\\w-])", item.text):
+            if re.search(r"(?<![\w-])ev-[0-9a-f]{16}(?![\w-])", item.text):
                 raise ValueError(f"Inline evidence ID in {label}")
             ids = item.claim_ids
             if len(ids) != len(set(ids)):
