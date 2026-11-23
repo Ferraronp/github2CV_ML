@@ -470,7 +470,9 @@ def _worker_request(*repositories, message_id=None, candidate="developer", role=
     from uuid import uuid4
 
     from github2cv_ml.worker_contracts import (
-        AnalysisOptions, MLJobRequest, RequestedRepository,
+        AnalysisOptions,
+        MLJobRequest,
+        RequestedRepository,
     )
 
     return MLJobRequest(
