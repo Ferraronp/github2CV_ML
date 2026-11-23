@@ -77,6 +77,11 @@ def write_pipeline_artifacts(result: PipelineResult, output_dir: Path) -> dict[s
             "cv/cv_writer_trace.json",
             json.dumps(result.cv_trace, ensure_ascii=False, indent=2) + "\n",
         )
+    if result.correction_events:
+        save(
+            "model_output_corrections.json",
+            json.dumps(result.correction_events, ensure_ascii=False, indent=2) + "\n",
+        )
 
     # Flat evidence-ID index makes provenance easy to resolve in the backend
     # without repeating GitHub queries or searching nested analysis files.
@@ -99,6 +104,7 @@ def write_pipeline_artifacts(result: PipelineResult, output_dir: Path) -> dict[s
         "has_resume": result.resume is not None,
         "evidence_count": len(result.evidence_index),
         "claim_count": len(result.profile.claims) if result.profile else 0,
+        "correction_count": len(result.correction_events),
         "artifacts": sorted([*paths, "pipeline_manifest.json"]),
     }
     save(
