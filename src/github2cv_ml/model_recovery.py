@@ -93,6 +93,17 @@ class RecoveringModel:
         unknown = set(references) - allowed
         if unknown:
             raise ValueError("Unknown evidence_ids: " + ", ".join(sorted(unknown)[:5]))
+        # Check inline evidence markers before the model output reaches the
+        # profile builder: bad visible citations must trigger a proper retry.
+        visible = set(re.findall(
+            r"(?<![\w-])ev-[0-9a-f]{16}(?![\w-])",
+            proposal.project.paragraph,
+        ))
+        if visible - set(proposal.project.evidence_ids):
+            raise ValueError(
+                "Unreferenced inline evidence_ids: "
+                + ", ".join(sorted(visible - set(proposal.project.evidence_ids))[:5])
+            )
         return proposal
 
     @staticmethod
