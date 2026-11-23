@@ -8,9 +8,9 @@ partial evidence is never silently represented as a complete analysis.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from enum import StrEnum
-from collections.abc import Callable, Mapping
 from typing import Any, Iterable, Literal
 
 from pydantic import Field, model_validator
