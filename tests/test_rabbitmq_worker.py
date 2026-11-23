@@ -156,3 +156,63 @@ def test_idempotency_conflict_is_dead_lettered_without_processing_loop(tmp_path)
     outgoing, key = worker._dead_exchange.published[0]
     assert key == "invalid"
     assert json.loads(outgoing.body)["reason"] == "idempotency_conflict"
+
+
+
+def test_oversized_result_is_terminal_dlq_not_infinite_requeue(tmp_path):
+    """Even the compact failed MLJobResult can exceed a tiny broker limit."""
+    request = _worker_request("api")
+    assert len(request.model_dump_json().encode()) < 1024
+
+    # 20 result entries, but only one incoming repo: we exercise transport's
+    # publish boundary independently of the already-validated model pipeline.
+    repositories = [
+        MLRepositoryResult(
+            repo_id=str(i + 100),
+            repository_url=f"https://github.com/example/very-long-repository-{i:02d}",
+            commit_sha="a" * 40,
+            context_hash="b" * 64,
+            status="failed",
+        ) for i in range(20)
+    ]
+    oversized = _failure(request).model_copy(update={"repositories": repositories})
+    assert len(oversized.model_dump_json().encode()) > 1024
+    service = SimpleNamespace(
+        db_path=tmp_path / "unused.sqlite3",
+        process=lambda _: oversized,  # Persisted ready result on every replay.
+    )
+    worker = RabbitMLWorker(RabbitSettings(url="amqp://dummy/", message_limit=1024), service)
+    worker._exchange, worker._dead_exchange = Exchange(), Exchange()
+    payload = request.model_dump_json().encode()
+
+    for _ in range(2):
+        incoming = Incoming(payload, message_id=str(request.message_id))
+        asyncio.run(worker.consume(incoming))
+        assert incoming.acked == 1
+        assert incoming.nacked == 0
+
+    assert not worker._exchange.published
+    assert len(worker._dead_exchange.published) == 2
+    for outgoing, key in worker._dead_exchange.published:
+        assert key == "invalid"
+        diagnostic = json.loads(outgoing.body)
+        assert diagnostic["reason"] == "oversized_response"
+        assert diagnostic["payload_sha256"]
+        assert len(outgoing.body) < 1024
+
+
+def test_small_limit_for_many_repository_request_dead_letters_without_loop(tmp_path):
+    """If even the request exceeds the cap it must never run the model."""
+    request = _worker_request(*(f"repo-{i}" for i in range(20)))
+    payload = request.model_dump_json().encode()
+    assert len(payload) > 1024
+    service = SimpleNamespace(
+        db_path=tmp_path / "unused.sqlite3",
+        process=lambda _: (_ for _ in ()).throw(AssertionError("no inference")),
+    )
+    worker = RabbitMLWorker(RabbitSettings(url="amqp://dummy/", message_limit=1024), service)
+    worker._exchange, worker._dead_exchange = Exchange(), Exchange()
+    incoming = Incoming(payload)
+    asyncio.run(worker.consume(incoming))
+    assert incoming.acked == 1 and incoming.nacked == 0
+    assert worker._dead_exchange.published[0][1] == "invalid"
