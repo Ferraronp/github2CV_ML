@@ -3,12 +3,11 @@
 import json
 
 import pytest
+from test_cv_writer import profile
 
 from github2cv_ml.cv_writer import write_resume
 from github2cv_ml.model_recovery import RecoveringModel
 from github2cv_ml.profile_builder import RepositoryProposal
-
-from test_cv_writer import profile
 
 EVIDENCE_A = "ev-05626e77ac47874b"
 EVIDENCE_B = "ev-f2a8a7976431d384"
