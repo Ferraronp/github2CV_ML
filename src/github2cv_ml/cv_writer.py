@@ -88,8 +88,8 @@ class WriterModel(Protocol):
     ) -> dict[str, Any]: ...
 
 
-_CLAIM_MARKER = re.compile(r"(?<![\\w-])claim-[a-z]+-[0-9a-f]{16}(?![\\w-])")
-_EVIDENCE_MARKER = re.compile(r"(?<![\\w-])ev-[0-9a-f]{16}(?![\\w-])")
+_CLAIM_MARKER = re.compile(r"(?<![\w-])claim-[a-z]+-[0-9a-f]{16}(?![\w-])")
+_EVIDENCE_MARKER = re.compile(r"(?<![\w-])ev-[0-9a-f]{16}(?![\w-])")
 
 
 class ProposedResumeItem(ContractModel):
@@ -138,8 +138,8 @@ def _resolve_item(
         raise ValueError(f"{component} exceeds 24 claim references")
     text = _CLAIM_MARKER.sub("", proposed.text)
     # Removing markers also removes now-empty parentheses and doubled spaces.
-    text = re.sub(r"\\(\\s*\\)", "", text)
-    text = re.sub(r"\\s+([.,;:])", r"\\1", text)
+    text = re.sub(r"\(\s*\)", "", text)
+    text = re.sub(r"\s+([.,;:])", r"\1", text)
     text = " ".join(text.split())
     if not text:
         raise ValueError(f"{component} contains only claim markers")
