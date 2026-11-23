@@ -576,3 +576,44 @@ Collector → RepoAnalyzer → Profile Builder → CV Writer на двух фи�
 репозиториях, подменяя только HTTP GitHub и LLM. Живой запуск на GPU
 и проверка достоверности технических утверждений модели остаются отдельными
 проверками.
+
+
+## RabbitMQ worker для ResumeHub — интеграция с Backend
+
+На основе актуального `gonnem2/PP-AUT-2026-API:dev` создан отдельный
+**ML Core consumer** для уже существующих durable RabbitMQ exchange/queues.
+Новый брокер, Redis-очередь или HTTP-сервис на стороне ML не требуются.
+
+```bash
+pip install -e ".[worker]"
+python -m github2cv_ml.rabbitmq_worker \
+  --base-url http://127.0.0.1:8080/v1 \
+  --model qwen-3.5 \
+  --store results/worker/ml.sqlite3
+```
+
+Запросы (`github.report.requested`) поступают в
+`resumehub.ml.requests`, ответы (`github.report.completed` или
+`github.report.failed`) отправляются в `resumehub.ml.results`.
+Строгая версия **2** контракта содержит pinned commit SHA по каждому
+репозиторию, кандидата и опции анализа, а в результате — отдельные
+`RepoAnalysis` с `evidence_ids`, `CandidateProfile` и
+`ResumeDocument` с `claim_ids`.
+
+В **постоянном SQLite volume** ML worker хранит технический кэш
+по каждому `repo+commit_sha+analyzer_revision+model+budget`, а также
+входные `message_id` и готовые результаты для идемпотентного ответа
+при повторной доставке. Отдельные репозитории сохраняются сразу после
+анализа; модель не повторяет их исследование для нового общего CV.
+Недоступность одного репозитория не приводит к потере остальных.
+
+**Важно:** существующий `CoreRequest/CoreResult v1` на бэкенде
+текстовый и **не совместим с v2**. Бэкенд должен обновить DTO и
+разбор результата, не изменяя RabbitMQ topology, уже реализованные
+PostgreSQL outbox, leases и логику авторизации. Не запускайте
+`demo-core` одновременно с настоящим worker.
+
+Полная схема, пример JSON, инструкция по миграции бэка и Compose:
+[**docs/RESUMEHUB_ML_WORKER.md**](docs/RESUMEHUB_ML_WORKER.md).
+Live broker/LLM integration требуется проверить отдельно — тесты
+используют fake GitHub HTTP и модель.

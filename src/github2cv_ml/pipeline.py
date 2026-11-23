@@ -8,6 +8,7 @@ partial evidence is never silently represented as a complete analysis.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Iterable, Literal
@@ -159,6 +160,8 @@ def run_pipeline(
     github_client: Any | None,
     model: ChatModel,
     cached_analyses: Iterable[RepoAnalysis] = (),
+    pinned_shas: Mapping[str, str] | None = None,
+    on_analysis: Callable[[RepoAnalysis], None] | None = None,
 ) -> PipelineResult:
     """Run sequential multi-repo collection and the two independent LLM stages.
 
@@ -170,6 +173,17 @@ def run_pipeline(
     if not isinstance(request, PipelineRequest):
         raise TypeError("run_pipeline requires PipelineRequest")
     seen = {normalize_repository(ref) for ref in request.repositories}
+    supplied_pins = pinned_shas or {}
+    pinned: dict[str, str] = {}
+    import re
+
+    for ref, sha in supplied_pins.items():
+        key = normalize_repository(ref)
+        if key not in seen or key in pinned:
+            raise ValueError(f"Pinned repository must be unique and requested: {ref}")
+        if not isinstance(sha, str) or not re.fullmatch(r"[a-fA-F0-9]{40}", sha):
+            raise ValueError(f"Pinned SHA must be 40 hex characters: {ref}")
+        pinned[key] = sha.lower()
     retained: list[RepoAnalysis] = []
     for analysis in cached_analyses:
         if len(seen) >= MAX_REPOSITORIES:
@@ -201,10 +215,16 @@ def run_pipeline(
         owner, name = key.split("/", 1)
         try:
             metadata = github_client.get_repository(owner, name)
+            if metadata.get("private") is True or metadata.get("visibility") not in (
+                None, "public",
+            ):
+                raise ValueError("Only public GitHub repositories are supported")
             branch = metadata.get("default_branch")
             if not isinstance(branch, str) or not branch.strip():
                 raise ValueError("GitHub default_branch is missing")
-            sha = github_client.get_branch_head_sha(owner, name, branch)
+            sha = pinned.get(key)
+            if sha is None:
+                sha = github_client.get_branch_head_sha(owner, name, branch)
             snapshot = GitHubRepositoryCollector(client=github_client).collect(
                 f"{owner}/{name}", commit_sha=sha
             )
@@ -230,6 +250,10 @@ def run_pipeline(
             )
             continue
         result.analyses.append(analysis)
+        if on_analysis is not None:
+            # Persist every completed repository before starting the next one.
+            # A worker restart must not lose all previous expensive LLM calls.
+            on_analysis(analysis)
     # Apply exactly the same quality checks to fresh and cached analyses.
     # A cached analysis is not automatically a *completed* analysis.
     for analysis in result.analyses:

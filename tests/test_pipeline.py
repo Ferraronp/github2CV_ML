@@ -437,6 +437,275 @@ def test_cli_failure_returns_code_two_and_still_saves_artifacts(tmp_path, monkey
     assert not (output / "cv" / "resume.json").exists()
 
 
+def test_pipeline_honors_pinned_sha_and_saves_each_repo_incrementally():
+    client = FakeGitHub()
+    saved = []
+    result = run_pipeline(
+        request("example/api", "example/worker", max_steps=4,
+                max_reads=2, min_planned_reads=1),
+        github_client=client,
+        model=FakeThreeStageModel(),
+        pinned_shas={"example/api": SHA, "example/worker": SHA},
+        on_analysis=saved.append,
+    )
+    assert result.resume is not None
+    assert len(saved) == 2
+    assert not client.branch_refs  # Pinned SHA must not resolve a moving HEAD.
+    assert all(a.commit_sha == SHA for a in saved)
+    with pytest.raises(ValueError, match="Pinned SHA"):
+        run_pipeline(
+            request("example/api"), github_client=client,
+            model=FakeThreeStageModel(),
+            pinned_shas={"example/api": "bad"},
+        )
+    with pytest.raises(ValueError, match="unique and requested"):
+        run_pipeline(
+            request("example/api"), github_client=client,
+            model=FakeThreeStageModel(),
+            pinned_shas={"example/unrequested": SHA},
+        )
+
+
+def _worker_request(*repositories, message_id=None, candidate="developer", role=None):
+    from uuid import uuid4
+
+    from github2cv_ml.worker_contracts import (
+        AnalysisOptions,
+        MLJobRequest,
+        RequestedRepository,
+    )
+
+    return MLJobRequest(
+        message_id=message_id or uuid4(),
+        job_id=uuid4(),
+        input_revision=1,
+        candidate=CandidateIdentity(github_login=candidate),
+        repositories=[
+            RequestedRepository(
+                repo_id=str(i + 100),
+                repository_url=f"https://github.com/example/{repo}",
+                commit_sha=SHA,
+                context_hash="f" * 64,
+                declared_role=role,
+            ) for i, repo in enumerate(repositories)
+        ],
+        options=AnalysisOptions(max_steps=5, max_reads=2, min_planned_reads=1),
+    )
+
+
+def test_worker_message_contract_rejects_extra_fields_bad_sha_and_duplicates():
+    from github2cv_ml.worker_contracts import MLJobRequest
+
+    incoming = _worker_request("api", "worker")
+    assert MLJobRequest.model_validate_json(incoming.model_dump_json()) == incoming
+    assert incoming.schema_version == 2
+    with pytest.raises(ValueError):
+        MLJobRequest.model_validate({**incoming.model_dump(), "unexpected": "value"})
+    with pytest.raises(ValueError):
+        _worker_request("api", "api")
+    altered = incoming.model_dump()
+    altered["repositories"][0]["commit_sha"] = "not-a-sha"
+    with pytest.raises(ValueError):
+        MLJobRequest.model_validate(altered)
+    altered = incoming.model_dump()
+    altered["repositories"][0]["repository_url"] = "https://evil.example/repo"
+    with pytest.raises(ValueError):
+        MLJobRequest.model_validate(altered)
+
+
+def test_worker_cache_reuses_repo_analyses_with_new_candidate_context(tmp_path):
+    from uuid import uuid4
+
+    from github2cv_ml.worker_service import JobProcessor
+    from github2cv_ml.worker_store import WorkerStore
+
+    db = tmp_path / "ml-cache.db"
+    gh = FakeGitHub()
+    model = FakeThreeStageModel()
+    processor = JobProcessor(
+        db_path=db, github_client=gh, model=model, model_id="qwen-3.5"
+    )
+    first = _worker_request("api", "worker")
+    result1 = processor.process(first)
+    assert result1.type == "github.report.completed"
+    assert result1.status == PipelineStatus.COMPLETED
+    assert len(result1.repositories) == 2
+    assert all(r.cache_hit is False for r in result1.repositories)
+    assert not gh.branch_refs
+    assert all(ref[-1] == SHA for ref in gh.source_refs)
+    first_reads = len(gh.source_refs)
+    first_calls = len(model.calls)
+    assert first_reads > 0
+
+    # The broker can redeliver the exact same message after losing publisher ACK.
+    assert processor.process(first) == result1
+    assert len(model.calls) == first_calls
+    assert len(gh.source_refs) == first_reads
+
+    # New request/user context reuses source facts, re-runs personal CV stages.
+    second = _worker_request("api", "worker", message_id=uuid4(),
+                             candidate="another-person", role="Reviewer")
+    result2 = processor.process(second)
+    assert result2.type == "github.report.completed"
+    assert all(r.cache_hit is True for r in result2.repositories)
+    assert len(gh.source_refs) == first_reads
+    assert len(model.calls) > first_calls
+    assert result2.profile.candidate.github_login == "another-person"
+    with WorkerStore(db) as store:
+        assert store.claim(first) == result1
+    assert result2.message_id != result1.message_id
+
+
+def test_worker_partial_failure_returns_full_repository_status_set(tmp_path):
+    from github2cv_ml.worker_service import JobProcessor
+
+    result = JobProcessor(
+        db_path=tmp_path / "worker.sqlite",
+        github_client=FakeGitHub(failing={"down"}),
+        model=FakeThreeStageModel(),
+        model_id="fake",
+    ).process(_worker_request("down", "api"))
+    assert result.type == "github.report.completed"
+    assert result.status == PipelineStatus.PARTIAL
+    assert [(r.repo_id, r.status) for r in result.repositories] == [
+        ("100", "failed"), ("101", "completed"),
+    ]
+    assert result.resume is not None
+    assert any(p.stage == PipelineStage.COLLECT for p in result.problems)
+
+
+def test_worker_rejects_result_replay_with_different_request_payload(tmp_path):
+    from github2cv_ml.worker_service import JobProcessor
+
+    request_v1 = _worker_request("api")
+    processor = JobProcessor(
+        db_path=tmp_path / "worker.sqlite",
+        github_client=FakeGitHub(),
+        model=FakeThreeStageModel(), model_id="fake",
+    )
+    processor.process(request_v1)
+    # Same message_id, changed job_id: fail instead of reusing somebody else's CV.
+    request_v2 = _worker_request("api", message_id=request_v1.message_id)
+    with pytest.raises(ValueError, match="reused"):
+        processor.process(request_v2)
+
+
+def test_worker_persists_repository_analysis_even_when_profile_fails(tmp_path):
+    from github2cv_ml.worker_service import JobProcessor
+
+    db = tmp_path / "worker.sqlite"
+    gh = FakeGitHub()
+    bad = JobProcessor(
+        db_path=db, github_client=gh,
+        model=FakeThreeStageModel(broken_profile=True), model_id="fake",
+    )
+    first = bad.process(_worker_request("api"))
+    assert first.type == "github.report.failed"
+    assert first.resume is None
+    assert len(first.repositories) == 1
+    assert first.repositories[0].analysis is not None
+    read_count = len(gh.source_refs)
+
+    good = JobProcessor(
+        db_path=db, github_client=gh,
+        model=FakeThreeStageModel(), model_id="fake",
+    )
+    second = good.process(_worker_request("api"))
+    assert second.type == "github.report.completed"
+    assert second.repositories[0].cache_hit
+    assert len(gh.source_refs) == read_count
+
+
+def test_store_processing_lease_prevents_concurrent_duplicate_until_released(tmp_path):
+    from github2cv_ml.worker_store import JobBusy, WorkerStore
+
+    request_msg = _worker_request("api")
+    with WorkerStore(tmp_path / "ml.sqlite3") as store:
+        first_token = store.claim(request_msg)
+        assert first_token == 1
+        assert store.attempt_count(
+            str(request_msg.message_id), lease_token=first_token
+        ) == 1
+        with pytest.raises(JobBusy):
+            store.claim(request_msg)
+        store.release(str(request_msg.message_id), lease_token=first_token)
+        second_token = store.claim(request_msg)
+        assert second_token == 2
+        assert store.attempt_count(
+            str(request_msg.message_id), lease_token=second_token
+        ) == 2
+
+
+def test_worker_cache_keys_invalidate_sha_or_model_or_budget():
+    from github2cv_ml.worker_contracts import AnalysisOptions
+    from github2cv_ml.worker_store import analysis_cache_key
+
+    options = AnalysisOptions()
+    x = analysis_cache_key("example/api", SHA, options, "qwen")
+    assert x == analysis_cache_key("https://github.com/EXAMPLE/API", SHA, options, "qwen")
+    assert x != analysis_cache_key("example/api", "b" * 40, options, "qwen")
+    assert x != analysis_cache_key("example/api", SHA, options, "gemma")
+    assert x != analysis_cache_key("example/api", SHA, options.model_copy(update={
+        "max_reads": 15,
+    }), "qwen")
+
+
+def test_failed_response_if_event_exceeds_transport_limit(tmp_path):
+    from github2cv_ml.worker_service import JobProcessor
+
+    processor = JobProcessor(
+        db_path=tmp_path / "ml.sqlite3", github_client=FakeGitHub(),
+        model=FakeThreeStageModel(), model_id="fake", max_event_bytes=100,
+    )
+    result = processor.process(_worker_request("api"))
+    assert result.type == "github.report.failed"
+    assert "exceeded" in result.error
+    assert result.resume is None
+
+
+def test_worker_retries_internal_error_only_three_times(tmp_path):
+    from github2cv_ml.worker_service import JobProcessor
+
+    class BrokenProcessor(JobProcessor):
+        def _run(self, request, store):
+            raise RuntimeError("Deliberate failure")
+
+    processor = BrokenProcessor(
+        db_path=tmp_path / "broken.sqlite3",
+        github_client=FakeGitHub(),
+        model=FakeThreeStageModel(),
+        model_id="fake",
+    )
+    request_msg = _worker_request("api")
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="Deliberate"):
+            processor.process(request_msg)
+    terminal = processor.process(request_msg)
+    assert terminal.type == "github.report.failed"
+    assert "3 attempts" in terminal.error
+    assert terminal.status == PipelineStatus.FAILED
+    assert processor.process(request_msg) == terminal
+
+
+def test_pipeline_public_only_even_if_github_token_has_private_access():
+    class PrivateGitHub(FakeGitHub):
+        def get_repository(self, owner, name):
+            metadata = super().get_repository(owner, name)
+            return {**metadata, "private": True}
+
+    github = PrivateGitHub()
+    result = run_pipeline(
+        request("example/api", max_steps=4, max_reads=2,
+                min_planned_reads=1),
+        github_client=github, model=FakeThreeStageModel(),
+        pinned_shas={"example/api": SHA},
+    )
+    assert result.status == PipelineStatus.FAILED
+    assert result.snapshots == [] and result.analyses == []
+    assert result.problems[0].stage == PipelineStage.COLLECT
+    assert not github.source_refs
+
+
 def test_cached_partial_analysis_marks_entire_pipeline_partial():
     """Regression: cached read_budget_exhausted previously became completed."""
     initial = run_pipeline(
@@ -490,3 +759,75 @@ def test_only_cached_empty_evidence_fails_with_repo_and_profile_diagnostics():
         (PipelineStage.ANALYZE, "no_evidence", "example/empty"),
         (PipelineStage.PROFILE, "no_evidence", None),
     ]
+
+
+
+def test_expired_worker_cannot_save_renew_or_release_successor_lease(tmp_path, monkeypatch):
+    """Review regression: generation A must never mutate reclaimed generation B."""
+    from uuid import NAMESPACE_URL, uuid5
+
+    from github2cv_ml.worker_contracts import MLJobResult, MLRepositoryResult
+    from github2cv_ml.worker_store import JobBusy, LeaseLost, WorkerStore
+
+    clock = [1000]
+    monkeypatch.setattr("github2cv_ml.worker_store.time.time", lambda: clock[0])
+    db_path = tmp_path / "fencing.sqlite3"
+    req = _worker_request("api")
+    repo = req.repositories[0]
+    result = MLJobResult(
+        type="github.report.failed",
+        message_id=uuid5(NAMESPACE_URL, str(req.message_id)),
+        request_message_id=req.message_id,
+        job_id=req.job_id,
+        input_revision=req.input_revision,
+        status=PipelineStatus.FAILED,
+        repositories=[
+            MLRepositoryResult(
+                repo_id=repo.repo_id, repository_url=repo.repository_url,
+                commit_sha=repo.commit_sha, context_hash=repo.context_hash,
+                status="failed",
+            )
+        ],
+        error="Test-only failed result",
+    )
+    with WorkerStore(db_path) as store_a, WorkerStore(db_path) as store_b:
+        token_a = store_a.claim(req, lease_seconds=10)
+        assert token_a == 1
+        clock[0] = 1011  # A's heartbeat is gone; B can take the expired lease.
+        token_b = store_b.claim(req, lease_seconds=10)
+        assert token_b == 2
+
+        with pytest.raises(LeaseLost):
+            store_a.save_result(req, result, lease_token=token_a)
+        with pytest.raises(LeaseLost):
+            store_a.release(str(req.message_id), lease_token=token_a)
+        with pytest.raises(LeaseLost):
+            store_a.renew(str(req.message_id), lease_token=token_a)
+        with pytest.raises(LeaseLost):
+            store_a.attempt_count(str(req.message_id), lease_token=token_a)
+
+        # B is still the only owner, even after A's attempted release.
+        with pytest.raises(JobBusy):
+            store_a.claim(req, lease_seconds=10)
+        store_b.renew(str(req.message_id), lease_token=token_b, lease_seconds=15)
+        clock[0] = 1020
+        store_b.save_result(req, result, lease_token=token_b)
+        assert store_a.claim(req) == result
+        with pytest.raises(LeaseLost):
+            store_a.release(str(req.message_id), lease_token=token_a)
+
+
+def test_expired_lease_without_successor_cannot_finalize(tmp_path, monkeypatch):
+    from github2cv_ml.worker_store import LeaseLost, WorkerStore
+
+    clock = [50]
+    monkeypatch.setattr("github2cv_ml.worker_store.time.time", lambda: clock[0])
+    req = _worker_request("api")
+    with WorkerStore(tmp_path / "expired.sqlite3") as store:
+        token = store.claim(req, lease_seconds=5)
+        clock[0] = 56
+        with pytest.raises(LeaseLost):
+            store.renew(str(req.message_id), lease_token=token)
+        with pytest.raises(LeaseLost):
+            store.release(str(req.message_id), lease_token=token)
+        assert store.claim(req) == 2
