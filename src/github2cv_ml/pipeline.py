@@ -254,6 +254,12 @@ def run_pipeline(
             # Persist every completed repository before starting the next one.
             # A worker restart must not lose all previous expensive LLM calls.
             on_analysis(analysis)
+    # Apply exactly the same quality checks to fresh and cached analyses.
+    # A cached analysis is not automatically a *completed* analysis.
+    for analysis in result.analyses:
+        key = normalize_repository(
+            f"{analysis.repository.owner}/{analysis.repository.name}"
+        )
         if not analysis.evidence:
             result.problems.append(PipelineProblem(
                 stage=PipelineStage.ANALYZE,
