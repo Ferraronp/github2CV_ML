@@ -5,11 +5,11 @@ import json
 from types import SimpleNamespace
 from uuid import NAMESPACE_URL, uuid5
 
+from test_pipeline import _worker_request
+
 from github2cv_ml.pipeline import PipelineStatus
 from github2cv_ml.rabbitmq_worker import RabbitMLWorker, RabbitSettings
 from github2cv_ml.worker_contracts import MLJobRequest, MLJobResult, MLRepositoryResult
-
-from test_pipeline import _worker_request
 
 
 class Exchange:
