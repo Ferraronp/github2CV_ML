@@ -128,10 +128,10 @@ def test_invalid_alias_reconciliation_keeps_all_original_skills():
         {"role": "user", "content": json.dumps(data)},
     ]
     output = json.loads(recovering.complete(messages, json_mode=True)["content"])
-    assert len(output["merges"]) == 1
-    assert output["merges"][0]["canonical"] == "Groq API"
-    assert output["merges"][0]["aliases"] == ["Groq"]
-    assert recovering.events[-1]["skipped"] == 3
+    assert output["merges"] == []
+    # Groq API vs Groq may be related, but the model's explanation alone
+    # does not prove an interchangeable skill name.
+    assert recovering.events[-1]["skipped"] == 4
 
 
 def test_invalid_reconciliation_json_yields_no_merges_not_fake_aliases():
@@ -295,3 +295,39 @@ def test_unreferenced_inline_evidence_id_is_not_silently_dropped():
             json.loads(answer["content"]), {EVIDENCE_A, EVIDENCE_B}
         )
     assert len(recovery.events) == 3
+
+
+
+def test_qwen_category_to_tool_merge_is_rejected_but_spelling_merge_survives():
+    """Actual Qwen run merged Qdrant into generic Vector Search; must not."""
+    request_payload = {
+        "task": "skill_reconciliation",
+        "skills": [
+            {"name": "Vector Search"}, {"name": "Qdrant"},
+            {"name": "FastAPI"}, {"name": "Fast-API"},
+        ],
+    }
+    llm = Responses({"merges": [
+        {
+            "canonical": "Vector Search",
+            "aliases": ["Qdrant"],
+            "reason": "The model claims the product enables vector search.",
+        },
+        {
+            "canonical": "FastAPI",
+            "aliases": ["Fast-API"],
+            "reason": "Same framework name with only punctuation difference.",
+        },
+    ]})
+    model = RecoveringModel(llm)
+    messages = [
+        {"role": "system", "content": "Reconcile synonyms"},
+        {"role": "user", "content": json.dumps(request_payload)},
+    ]
+    data = json.loads(model.complete(messages, json_mode=True)["content"])
+    assert data == {"merges": [{
+        "canonical": "FastAPI",
+        "aliases": ["Fast-API"],
+        "reason": "Same framework name with only punctuation difference.",
+    }]}
+    assert model.events[-1]["skipped"] == 1
