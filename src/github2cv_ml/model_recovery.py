@@ -239,9 +239,10 @@ class RecoveringModel:
             # "Vector Search" in a real smoke run. Until a reviewed synonym
             # ontology exists, only accept superficial punctuation/case/spacing
             # variants (e.g. "Fast-API" vs "FastAPI").
-            spelling = lambda value: "".join(
-                char for char in value.casefold() if char.isalnum()
-            )
+            def spelling(value: str) -> str:
+                return "".join(
+                    char for char in value.casefold() if char.isalnum()
+                )
             if any(
                 spelling(alias) != spelling(names_by_key[key])
                 for alias in valid
