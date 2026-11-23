@@ -10,6 +10,7 @@ from test_pipeline import _worker_request
 from github2cv_ml.pipeline import PipelineStatus
 from github2cv_ml.rabbitmq_worker import RabbitMLWorker, RabbitSettings
 from github2cv_ml.worker_contracts import MLJobRequest, MLJobResult, MLRepositoryResult
+from github2cv_ml.worker_store import IdempotencyConflict
 
 
 class Exchange:
@@ -134,3 +135,24 @@ def test_envelope_roundtrip_produces_valid_json_and_known_routing():
     result = _failure(loaded)
     assert MLJobResult.model_validate_json(result.model_dump_json()) == result
     assert result.schema_version == 2
+
+
+
+def test_idempotency_conflict_is_dead_lettered_without_processing_loop(tmp_path):
+    request = _worker_request("api")
+
+    def conflict(_request):
+        raise IdempotencyConflict("UUID already used for a different payload")
+
+    worker = RabbitMLWorker(
+        RabbitSettings(url="amqp://dummy/"),
+        SimpleNamespace(db_path=tmp_path / "unused.sqlite", process=conflict),
+    )
+    worker._exchange, worker._dead_exchange = Exchange(), Exchange()
+    incoming = Incoming(request.model_dump_json().encode())
+    asyncio.run(worker.consume(incoming))
+    assert incoming.acked == 1 and incoming.nacked == 0
+    assert not worker._exchange.published
+    outgoing, key = worker._dead_exchange.published[0]
+    assert key == "invalid"
+    assert json.loads(outgoing.body)["reason"] == "idempotency_conflict"
