@@ -767,7 +767,7 @@ def test_expired_worker_cannot_save_renew_or_release_successor_lease(tmp_path, m
     from uuid import NAMESPACE_URL, uuid5
 
     from github2cv_ml.worker_contracts import MLJobResult, MLRepositoryResult
-    from github2cv_ml.worker_store import LeaseLost, WorkerStore
+    from github2cv_ml.worker_store import JobBusy, LeaseLost, WorkerStore
 
     clock = [1000]
     monkeypatch.setattr("github2cv_ml.worker_store.time.time", lambda: clock[0])
