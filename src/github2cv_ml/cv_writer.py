@@ -23,6 +23,8 @@ WRITER_PROMPT = """You are a professional CV editor writing an engaging,
 RECRUITER-FRIENDLY but rigorously factual CV overview IN RUSSIAN.
 Your task is to PRESENT real evidence attractively, not exaggerate it.
 You are given ONLY existing CandidateProfile claims, not source code.
+Do NOT print claim IDs or evidence IDs in visible summary/headline text.
+Place IDs only in the claim_ids metadata arrays.
 Produce exactly one JSON object:
 {
   "summary": {
@@ -86,6 +88,10 @@ class WriterModel(Protocol):
     ) -> dict[str, Any]: ...
 
 
+_CLAIM_MARKER = re.compile(r"(?<![\\w-])claim-[a-z]+-[0-9a-f]{16}(?![\\w-])")
+_EVIDENCE_MARKER = re.compile(r"(?<![\\w-])ev-[0-9a-f]{16}(?![\\w-])")
+
+
 class ProposedResumeItem(ContractModel):
     text: str = Field(min_length=1, max_length=650)
     claim_ids: list[NonEmptyId] = Field(min_length=1, max_length=24)
@@ -112,12 +118,32 @@ def _resolve_item(
     *,
     component: str,
 ) -> ResumeItem:
-    ids = proposed.claim_ids
+    ids = [*proposed.claim_ids]
     if len(set(ids)) != len(ids):
         raise ValueError(f"Duplicate claim_ids in {component}")
     if any(identifier not in available_ids for identifier in ids):
         raise ValueError(f"Unknown CandidateProfile claim id in {component}")
-    return ResumeItem(text=proposed.text, claim_ids=ids)
+
+    # Gemma may embed existing claim-project-... identifiers in the prose.
+    # Keep references only as structured metadata, without making up links.
+    markers = _CLAIM_MARKER.findall(proposed.text)
+    if any(marker not in available_ids for marker in markers):
+        raise ValueError(f"Unknown inline CandidateProfile claim id in {component}")
+    if _EVIDENCE_MARKER.search(proposed.text):
+        raise ValueError(f"Inline evidence identifier is not valid CV prose in {component}")
+    for identifier in markers:
+        if identifier not in ids:
+            ids.append(identifier)
+    if len(ids) > 24:
+        raise ValueError(f"{component} exceeds 24 claim references")
+    text = _CLAIM_MARKER.sub("", proposed.text)
+    # Removing markers also removes now-empty parentheses and doubled spaces.
+    text = re.sub(r"\\(\\s*\\)", "", text)
+    text = re.sub(r"\\s+([.,;:])", r"\\1", text)
+    text = " ".join(text.split())
+    if not text:
+        raise ValueError(f"{component} contains only claim markers")
+    return ResumeItem(text=text, claim_ids=ids)
 
 
 def _complete_mentioned_skills(
