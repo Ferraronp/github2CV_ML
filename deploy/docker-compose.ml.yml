@@ -1,0 +1,37 @@
+# Overlay for the *backend* docker-compose.yml. Run from the parent directory:
+# docker compose -f PP-AUT-2026-API/docker-compose.yml \
+#   -f github2CV_ML/deploy/docker-compose.ml.yml up -d
+#
+# Paths are relative to the FIRST Compose file (the backend directory).
+# Llama.cpp stays outside Docker on the host's port 8080.
+services:
+  ml-core:
+    build:
+      context: ../github2CV_ML
+      dockerfile: deploy/Dockerfile.worker
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - github2cv_ml.rabbitmq_worker
+      - --allow-remote-model
+    environment:
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-resumehub}:${RABBITMQ_PASSWORD:-resumehub}@rabbitmq:5672/
+      ML_EXCHANGE: resumehub.ml
+      ML_REQUEST_QUEUE: resumehub.ml.requests
+      ML_RESULT_QUEUE: resumehub.ml.results
+      ML_DEAD_LETTER_QUEUE: resumehub.ml.invalid-results
+      ML_MODEL_BASE_URL: http://host.docker.internal:8080/v1
+      ML_MODEL_ID: qwen-3.5
+      ML_STORE_PATH: /data/ml.sqlite3
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ml_cache:/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  ml_cache:
