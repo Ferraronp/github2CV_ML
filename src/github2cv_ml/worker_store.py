@@ -26,6 +26,10 @@ class JobBusy(RuntimeError):
     """Another worker currently holds the unexpired message lease."""
 
 
+class IdempotencyConflict(ValueError):
+    """The same message UUID was reused with a different request body."""
+
+
 def analysis_cache_key(
     url: str,
     commit_sha: str,
@@ -139,7 +143,7 @@ class WorkerStore:
             ).fetchone()
             if row is not None:
                 if row[0] != payload_hash:
-                    raise ValueError("message_id reused for a different ML request")
+                    raise IdempotencyConflict("message_id reused for a different ML request")
                 if row[1] == "ready":
                     return MLJobResult.model_validate_json(row[3])
                 if row[2] > now:
