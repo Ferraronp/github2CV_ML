@@ -18,7 +18,7 @@ from github2cv_ml.agent.runner import RepoAnalysis
 from github2cv_ml.pipeline import normalize_repository
 from github2cv_ml.worker_contracts import AnalysisOptions, MLJobRequest, MLJobResult
 
-ANALYZER_REVISION = "analyzer-v3-12read-2026-11"
+ANALYZER_REVISION = "analyzer-v4-text-files-2026-11"
 MAX_ANALYSIS_BYTES = 8_000_000
 
 
