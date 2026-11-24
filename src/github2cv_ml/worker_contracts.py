@@ -8,7 +8,7 @@ a Profile and ResumeDocument. No user credentials or private source are sent.
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import Field, field_validator, model_validator
@@ -107,6 +107,8 @@ class MLJobResult(ContractModel):
     resume: ResumeDocument | None = None
     problems: list[PipelineProblem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Optional, bounded correction metadata; never raw LLM/source responses.
+    correction_events: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
 
     @model_validator(mode="after")

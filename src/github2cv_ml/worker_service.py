@@ -101,6 +101,7 @@ def _result_for(
         resume=pipeline.resume if has_resume else None,
         problems=problems,
         warnings=pipeline.warnings,
+        correction_events=pipeline.correction_events[:100],
         error=None if has_resume else "ML pipeline did not produce an evidence-backed CV",
     )
 

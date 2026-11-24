@@ -209,10 +209,11 @@ def test_http_adapter_uses_openai_tool_protocol(monkeypatch):
         ".npmrc", ".pypirc", ".netrc", "pip.conf",
         "src/.npmrc", "config/.pypirc", "home/.netrc", "config/pip.conf",
         "src/.env.production", "src/credentials.py", "src/secret_settings.py",
-        "src/config.yaml", "src/random.json", "src/unknown_extension",
+        "src/asset.png", "models/model.gguf", "src/.git-credentials",
+        "src/id_rsa", "config/credentials.yaml",
     ],
 )
-def test_secret_or_config_paths_never_reach_github_client(blocked_path):
+def test_sensitive_or_binary_paths_never_reach_github_client(blocked_path):
     snapshot = make_snapshot()
     snapshot.file_tree.append(
         RepoTreeEntry(path=blocked_path, kind=RepoTreeEntryKind.FILE, size=24)
@@ -407,3 +408,39 @@ def test_http_adapter_rejects_invalid_temperature(temperature):
 def test_http_adapter_rejects_invalid_output_token_limit(max_tokens):
     with pytest.raises(ValueError, match="max_tokens"):
         LocalOpenAIModel(max_tokens=max_tokens)
+
+
+@pytest.mark.parametrize("path", [
+    "Dockerfile", "docker-compose.yml", ".github/workflows/ci.yaml",
+    "src/config.yaml", "src/random.json", "scripts/deploy",
+    "main.tf", "query.sql", "README.md", "src/module.customlang",
+])
+def test_text_candidates_do_not_require_language_extension(path):
+    snapshot = make_snapshot()
+    snapshot.file_tree.append(RepoTreeEntry(path=path, kind=RepoTreeEntryKind.FILE, size=24))
+
+    class TextGitHub(FakeGitHub):
+        def get_file(self, owner, name, path, ref):
+            self.refs.append((path, ref))
+            return "configured_service: example\n".replace("\\n", "\n")
+
+    github = TextGitHub()
+    browser = RepositoryBrowser(github, snapshot, SHA)
+    assert path in browser.source_paths()
+    assert browser.read_file(path, 1, 1)["numbered_text"] == "1: configured_service: example"
+    assert github.refs == [(path, SHA)]
+
+
+@pytest.mark.parametrize("content", ["bad\x00data", "bad\ufffddata", "bad\x03data"])
+def test_unknown_extension_binary_content_never_reaches_model(content):
+    class BinaryGitHub(FakeGitHub):
+        def get_file(self, owner, name, path, ref):
+            return content
+
+    snapshot = make_snapshot()
+    snapshot.file_tree.append(
+        RepoTreeEntry(path="unknown", kind=RepoTreeEntryKind.FILE, size=24)
+    )
+    browser = RepositoryBrowser(BinaryGitHub(), snapshot, SHA)
+    with pytest.raises(ValueError, match="binary"):
+        browser.read_file("unknown", 1, 1)

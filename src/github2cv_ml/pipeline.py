@@ -28,6 +28,7 @@ from github2cv_ml.domain.evidence import RepoEvidence
 from github2cv_ml.domain.profile import CandidateIdentity, CandidateProfile
 from github2cv_ml.domain.repository import RepoSnapshot
 from github2cv_ml.domain.resume import ResumeDocument
+from github2cv_ml.model_recovery import RecoveringModel
 from github2cv_ml.profile_builder import build_profile_from_analyses
 from github2cv_ml.profile_demo import TracingProfileModel
 
@@ -98,6 +99,7 @@ class PipelineResult(ContractModel):
     warnings: list[str] = Field(default_factory=list)
     profile_trace: list[dict[str, Any]] = Field(default_factory=list)
     cv_trace: list[dict[str, Any]] = Field(default_factory=list)
+    correction_events: list[dict[str, Any]] = Field(default_factory=list)
     # Present only when Profile Builder failed; never reuse invalid model text
     # as trusted candidate data. Useful for diagnosing Qwen JSON truncation.
     profile_error_responses: list[dict[str, Any]] = Field(default_factory=list)
@@ -282,7 +284,8 @@ def run_pipeline(
         ))
         return result
 
-    observed_profile = TracingProfileModel(model)
+    recovering = RecoveringModel(model)
+    observed_profile = TracingProfileModel(recovering)
     try:
         profile = build_profile_from_analyses(
             good,
@@ -304,8 +307,9 @@ def run_pipeline(
         return result
     finally:
         result.profile_trace = observed_profile.calls
+        result.correction_events = list(recovering.events)
 
-    observed_writer = TracingWriterModel(model)
+    observed_writer = TracingWriterModel(recovering)
     try:
         result.resume = write_resume(
             result.profile,
@@ -321,6 +325,19 @@ def run_pipeline(
         return result
     finally:
         result.cv_trace = observed_writer.calls
+        result.correction_events = list(recovering.events)
+
+    if any(
+        event["kind"] in {
+            "omitted_unsupported_skills", "ignored_invalid_merges",
+            "conservative_fallback",
+        }
+        for event in result.correction_events
+    ):
+        result.warnings.append(
+            "Model output required evidence-safe omissions, skipped alias groups "
+            "or a conservative CV overview; inspect correction_events"
+        )
 
     result.status = (
         PipelineStatus.PARTIAL

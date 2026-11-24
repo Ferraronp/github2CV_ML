@@ -258,15 +258,43 @@ def test_failed_profile_preserves_analysis_and_identifies_stage(tmp_path):
     assert len(debug["responses"]) == 2
 
 
-def test_failed_cv_preserves_profile_with_stage_context():
+def test_invalid_cv_claim_ids_use_explicit_conservative_fallback(tmp_path):
     result = run_pipeline(
         request("example/api", max_steps=4, max_reads=2, min_planned_reads=1),
         github_client=FakeGitHub(),
         model=FakeThreeStageModel(broken_cv=True),
     )
+    assert result.status == PipelineStatus.PARTIAL
+    assert result.profile is not None and result.resume is not None
+    assert result.problems == []
+    assert result.resume.summary.claim_ids
+    assert all(
+        claim_id in {c.id for c in result.profile.claims}
+        for claim_id in result.resume.summary.claim_ids
+    )
+    assert any(e["kind"] == "conservative_fallback" for e in result.correction_events)
+    assert result.warnings
+    out = tmp_path / "recovered"
+    write_pipeline_artifacts(result, out)
+    assert (out / "model_output_corrections.json").exists()
+    assert json.loads(
+        (out / "pipeline_manifest.json").read_text("utf-8")
+    )["correction_count"] == len(result.correction_events)
+
+
+def test_cv_model_transport_error_keeps_profile_and_reports_failure():
+    class UnavailableWriter(FakeThreeStageModel):
+        def complete(self, messages, *, tools=None, json_mode=False):
+            if "You are a professional CV editor" in messages[0]["content"]:
+                raise RuntimeError("model connection dropped")
+            return super().complete(messages, tools=tools, json_mode=json_mode)
+
+    result = run_pipeline(
+        request("example/api", max_steps=4, max_reads=2, min_planned_reads=1),
+        github_client=FakeGitHub(), model=UnavailableWriter(),
+    )
     assert result.status == PipelineStatus.FAILED
-    assert result.profile is not None
-    assert result.resume is None
+    assert result.profile is not None and result.resume is None
     assert result.problems[-1].stage == PipelineStage.RESUME
     assert result.problems[-1].code == "resume_failed"
 
@@ -831,3 +859,24 @@ def test_expired_lease_without_successor_cannot_finalize(tmp_path, monkeypatch):
         with pytest.raises(LeaseLost):
             store.release(str(req.message_id), lease_token=token)
         assert store.claim(req) == 2
+
+
+def test_rabbitmq_v2_result_includes_model_recovery_audit(tmp_path):
+    """Backend receives the same recovery diagnostics, not just a vague warning."""
+    from github2cv_ml.worker_service import JobProcessor
+
+    processor = JobProcessor(
+        db_path=tmp_path / "recovering.sqlite3",
+        github_client=FakeGitHub(),
+        model=FakeThreeStageModel(broken_cv=True),
+        model_id="fake",
+    )
+    result = processor.process(_worker_request("api"))
+    assert result.type == "github.report.completed"
+    assert result.status == PipelineStatus.PARTIAL
+    assert result.resume is not None
+    assert any(
+        event["kind"] == "conservative_fallback"
+        for event in result.correction_events
+    )
+    assert "raw_content" not in result.model_dump_json()
