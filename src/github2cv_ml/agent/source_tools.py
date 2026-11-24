@@ -12,16 +12,22 @@ _SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", "dist", "build",
     ".next", ".tox", "vendor", "coverage", ".mypy_cache", ".pytest_cache",
 }
-# Source-code only: configuration files and unknown formats are not exposed to the model.
-# This cannot guarantee that a source file contains no hard-coded credentials.
-_SOURCE_SUFFIXES = {
-    ".py", ".pyi", ".go", ".js", ".jsx", ".ts", ".tsx", ".rs",
-    ".java", ".kt", ".kts", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs",
-    ".rb", ".php",
+# Accept text candidates independently of language or filename extension.
+# Keep common binary artifacts out of the planning budget; unknown formats
+# still have to pass the content and size checks before reaching the model.
+_BINARY_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tiff",
+    ".pdf", ".zip", ".gz", ".tar", ".7z", ".rar", ".xz", ".bz2",
+    ".exe", ".dll", ".so", ".dylib", ".o", ".a", ".class", ".jar",
+    ".woff", ".woff2", ".ttf", ".otf", ".mp3", ".mp4", ".wav",
+    ".gguf", ".safetensors", ".pt", ".pth", ".onnx", ".bin",
+    ".db", ".sqlite", ".sqlite3", ".pkl", ".pickle", ".npy", ".npz",
+    ".docx", ".xlsx", ".pptx", ".jks", ".keystore", ".kdbx",
 }
 _CREDENTIAL_NAMES = {
     ".env", ".env.local", ".env.production", ".npmrc", ".pypirc",
     ".netrc", "pip.conf", "id_rsa", "id_ed25519",
+    ".git-credentials", ".htpasswd", ".dockerconfigjson", "id_dsa", "id_ecdsa",
 }
 _PRIORITY = {".py": 0, ".go": 1, ".ts": 2, ".tsx": 3, ".js": 4, ".rs": 5}
 
@@ -39,7 +45,7 @@ def _allowed_path_parts(path: str) -> bool:
         return False
     for part in parts:
         lower = part.lower()
-        if lower in _CREDENTIAL_NAMES or lower.startswith(".env."):
+        if lower in _CREDENTIAL_NAMES or lower.startswith((".env.", "id_rsa.", "id_ed25519.")):
             return False
         if "secret" in lower or "credential" in lower or "private" in lower:
             return False
@@ -49,10 +55,10 @@ def _allowed_path_parts(path: str) -> bool:
 
 
 def allowed_source_path(path: str) -> bool:
-    """Allow known source-code extensions only; reject credentials/configs."""
+    """Accept text candidates; reject sensitive paths and common binary artifacts."""
     if not _allowed_path_parts(path):
         return False
-    return PurePosixPath(path).suffix.lower() in _SOURCE_SUFFIXES
+    return PurePosixPath(path).suffix.lower() not in _BINARY_SUFFIXES
 
 
 @dataclass
@@ -106,7 +112,14 @@ class RepositoryBrowser:
         content = self.client.get_file(repo.owner, repo.name, path, self.commit_sha)
         if content is None:
             raise ValueError("File cannot be fetched at the pinned commit")
-        if len(content.encode("utf-8")) > self.max_file_bytes or "\x00" in content:
+        if (
+            len(content.encode("utf-8")) > self.max_file_bytes
+            or "\ufffd" in content
+            or any(
+                (ord(char) < 32 and char not in "\t\r\n") or 127 <= ord(char) < 160
+                for char in content
+            )
+        ):
             raise ValueError("File is too large or binary")
         self._cache[path] = content.splitlines()
         return self._cache[path]
@@ -259,7 +272,7 @@ class RepositoryBrowser:
 EXPLORER_TOOLS = [
     {
         "type": "function", "function": {
-            "name": "list_files", "description": "Page through safe source files. Follow next_offset for more; path is an optional directory prefix.",
+            "name": "list_files", "description": "Page through eligible text files (source, scripts, infrastructure and documentation). Follow next_offset for more; path is an optional directory prefix.",
             "parameters": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "Directory prefix, or empty for all"},
                 "offset": {"type": "integer", "minimum": 0},
@@ -279,7 +292,7 @@ EXPLORER_TOOLS = [
     },
     {
         "type": "function", "function": {
-            "name": "read_file", "description": "Read up to 120 numbered lines of one safe source file at the frozen commit; findings will be extracted automatically.",
+            "name": "read_file", "description": "Read up to 120 numbered lines of one eligible text file at the frozen commit; findings will be extracted automatically.",
             "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"},
                 "start_line": {"type": "integer", "minimum": 1},
