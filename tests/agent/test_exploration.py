@@ -809,3 +809,13 @@ def test_min_planned_reads_rejects_invalid_floor(floor):
             SequenceModel([]), browser, max_read_calls=4,
             min_planned_reads=floor,
         )
+
+
+def test_infrastructure_only_repo_gets_readable_plan_before_documentation():
+    paths = ["README.md", "docker-compose.yml", "Dockerfile", "scripts/deploy"]
+    browser = RepositoryBrowser(FakeClient(), snapshot(paths), SHA)
+    plan = build_exploration_plan(browser.source_paths(), limit=3)
+    assert {entry["path"] for entry in plan} == {
+        "docker-compose.yml", "Dockerfile", "scripts/deploy",
+    }
+    assert plan[0]["candidate_role"] == "infrastructure"
