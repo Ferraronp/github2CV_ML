@@ -9,7 +9,7 @@ PRIMARY_ROLES = (
     "pipeline", "retrieval", "generation", "service", "data_access",
     "security", "infrastructure", "entrypoint",
 )
-SECONDARY_ROLES = ("core", "evaluation", "migration")
+SECONDARY_ROLES = ("core", "evaluation", "migration", "documentation")
 ROLE_ORDER = PRIMARY_ROLES + SECONDARY_ROLES
 
 
@@ -17,6 +17,19 @@ def _role_for(path: str) -> str:
     p = PurePosixPath(path)
     name = p.stem.lower()
     parents = {part.lower() for part in p.parts[:-1]}
+    filename = p.name.lower()
+    if (
+        filename.startswith(("dockerfile", "docker-compose", "compose."))
+        or filename in {"makefile", "containerfile", "jenkinsfile"}
+        or (".github" in parents and "workflows" in parents)
+        or p.suffix.lower() in {".tf", ".tfvars", ".hcl", ".service"}
+    ):
+        return "infrastructure"
+    if (
+        p.suffix.lower() in {".md", ".rst", ".adoc", ".lock"}
+        or filename in {"readme", "license", "package-lock.json", "yarn.lock", "go.sum"}
+    ):
+        return "documentation"
     # Migration filenames often contain "pipeline", "generation" or "service",
     # but schema changes are not proof of application implementations.
     if parents & {"migrations", "alembic"}:
@@ -121,4 +134,7 @@ def build_exploration_plan(paths: list[str], limit: int = 7) -> list[dict[str, s
     ):
         for role in ("evaluation", "migration"):
             take_one(role)
+    # Documentation and lockfiles are available, but do not crowd out code.
+    while len(selected) < limit and buckets["documentation"]:
+        take_one("documentation")
     return selected
